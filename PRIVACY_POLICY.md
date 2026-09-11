@@ -52,7 +52,8 @@ public URL being looked up):
 | **Discord (webhooks)** | Delivers the generated messages | https://discord.com/privacy |
 | **Nitter mirrors / Redlib** | Public RSS feeds for X/Twitter and Reddit | per-instance |
 | **FxTwitter / FxEmbed API** | Tweet metadata, media, translation | https://fxtwitter.com |
-| **video.twimg.com (X CDN)** | HTTP HEAD probes of public video file sizes (X V2/V3 "smart video" check) — no content is downloaded | https://x.com |
+| **video.twimg.com / x.com (X CDN & post pages)** | HTTP HEAD probes of public video file sizes (X V2/V3 "smart video" check) and OpenGraph image lookups on public post pages — only meta tags are read, no content is downloaded | https://x.com |
+| **gif.fxtwitter.com** | One HEAD probe per X GIF to check the animated WebP rendition exists before using it | https://fxtwitter.com |
 | **EmbedEZ API** (Reddit V2 only) | Reddit post metadata, media | https://embedez.com |
 | **reddit.com** | Public subreddit RSS | https://www.reddit.com/policies/privacy-policy |
 | **cron-job.org** (optional) | External schedule trigger | https://cron-job.org/en/privacy/ |

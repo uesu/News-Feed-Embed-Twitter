@@ -18,8 +18,8 @@ please support them:
 |---|---|---|
 | **News-Flash-Bot** by [@cold-logic5](https://github.com/cold-logic5) | The original repository this project is based on (RSS → Discord webhook architecture) | [GitHub repo](https://github.com/cold-logic5/News-Flash-Bot) · [Author](https://github.com/cold-logic5) |
 | **Nitter** by [@zedeus](https://github.com/zedeus) | Free & open-source, privacy-focused X/Twitter front-end providing the RSS feeds | [GitHub](https://github.com/zedeus/nitter) · [nitter.net](https://nitter.net/) · [nitter.perennialte.ch](https://nitter.perennialte.ch/) · [xcancel.com](https://xcancel.com/) · 💖 [Donate via Liberapay](https://liberapay.com/zedeus) |
-| **FxTwitter / FxEmbed** | Rich X/Twitter embeds (auto-unfurl) + the free API used for media, stats, and translation | [GitHub](https://fxtwitter.com) · [FxEmbed Docs](https://docs.fxembed.com/) |
-| **EmbedEZ** | Rich Reddit embeds (redditez.com mirror) + the provider API used by Reddit V2 | [embedez.com](https://embedez.com/) · [API docs](https://embedez.com/docs) |
+| **FxTwitter / FxEmbed** by [@isovel](https://github.com/isovel) | Rich X/Twitter embeds (auto-unfurl) + the free API used for media, stats, translation, GIF re-rendering and the video proxy | [fxtwitter.com](https://fxtwitter.com) · [api.fxtwitter.com](https://api.fxtwitter.com) · [GitHub](https://github.com/isovel) · 💖 [Sponsor isovel](https://github.com/sponsors/isovel) |
+| **EmbedEZ** | Rich Reddit embeds (redditez.com mirror) + the provider API used by Reddit V2 | [embedez.com](https://embedez.com/) · [redditez.com](https://www.redditez.com) · [API docs](https://embedez.com/docs) |
 | **Embeddit** by [@DeltAndy123](https://github.com/DeltAndy123) | Alternative Reddit embed mirror (credited — its button was removed in the 2026-09-11 trim) | [GitHub](https://github.com/DeltAndy123/Embeddit) · [embeddit.deltandy.me](https://embeddit.deltandy.me) |
 | **vxReddit** by [@dylanpdx](https://github.com/dylanpdx) | Alternative Reddit embed mirror (credited — its button was removed in the 2026-09-11 trim) | [GitHub](https://github.com/dylanpdx/vxReddit) · [vxreddit.com](https://vxreddit.com) |
 | **Redlib** | Reddit front-end mirror used as an RSS fallback source | [redlib.perennialte.ch](https://redlib.perennialte.ch) |
@@ -28,7 +28,9 @@ please support them:
 | **Discord Webhooks** | Delivers messages to channels statelessly | — |
 
 Huge respect and gratitude to [@cold-logic5](https://github.com/cold-logic5) for the original
-architecture, and to the Nitter project — if you can, [support zedeus on Liberapay](https://liberapay.com/zedeus).
+architecture, to the Nitter project — if you can, [support zedeus on Liberapay](https://liberapay.com/zedeus) —
+and to [@isovel](https://github.com/isovel), creator of FxTwitter/FxEmbed — donations welcome at
+[github.com/sponsors/isovel](https://github.com/sponsors/isovel).
 
 ---
 
@@ -158,6 +160,46 @@ buttons, and cache commits).
 * **Null-safe accent color** — FxTwitter sometimes returns `"color": null`; the card now falls back
   to Twitter blue instead of crashing.
 
+## 🆕 X V2/V3 card behaviors — round 4 (2026-09-11)
+
+Fixes and formats added after real feed runs:
+
+* **Discord `400 {"components": ["0"]}` errors — FIXED.** Root cause: tweets with an **empty body**
+  (a repost of a media-only quote post; an X Article) produced a zero-length text component, which
+  Discord rejects. Text is now chunked (≤ 1900 chars per component, up to 4 components) and empty
+  components are never emitted — so **very long tweets also render now** instead of failing.
+* **Quoted posts are rendered.** Tweets quoting another post show:
+  `>>> [Quote](url) from **Name** (@user)` + the quoted text + the quoted tweet's own media gallery
+  (videos in quotes get the same size/GIF/portrait treatment).
+* **X Articles & link cards get their image.** When a tweet has no media, the script fetches the
+  tweet's own `x.com` page and reads its OpenGraph image — for X Articles that's the **article
+  banner**, for link posts (e.g. `hoyo.link`) it's the **card image**. Fallback: the first external
+  link's `og:image` (works for hoyoverse/kurogames pages). Profile pictures are never used, and the
+  extra fetch is skipped for normal tweets.
+* **GIF support.** X "GIFs" are internally tiny looping mp4s (`tweet_video/*.mp4`). When detected,
+  the script swaps in FxTwitter's animated **WebP** rendition
+  (`gif.fxtwitter.com/tweet_video/*.webp`), which renders/plays as an image in Discord. That CDN is
+  **intermittently down** (Cloudflare 530/1033 — a maintainer-side issue, confirmed live); when it
+  doesn't answer, the mp4 is kept, which still plays as a video. Never forced — it self-heals once
+  the CDN recovers.
+* **Portrait videos that "load but won't play" — root-caused in round 5.** Vertical videos
+  (`h > w`, e.g. the 58s Jingran showcase) intermittently failed to play right after posting —
+  but follow-up tests showed the **same direct URLs playing fine** in Components V2 shortly after
+  (even media that had failed earlier). It was a transient Discord proxy warm-up issue, not a
+  portrait incompatibility, so direct URLs are now used for all videos (same as every other embed
+  service). A documented one-line toggle (`PORTRAIT_PROXY = True`) can re-route vertical videos
+  through FxTwitter's embed proxy (`/2/go?url=…`) if genuine breakage is ever proven again.
+* **`/status/:id` API path.** The screen-name API path (`/<user>/status/:id`) returns **404** for
+  reposts of other authors, X Articles, and some newer tweets (verified live); the plain-ID path
+  resolves everything. Read Post links now use the **true author** from the payload, so reposts link
+  to the original post correctly. Same for the `/en` translation fetch.
+* **"↩️ Replying to @user"** small line appears on replies (links to the parent post when known).
+* **New animated button emoji** on X *and* Reddit (per your spec): Read Post
+  `<a:starwardhmm:1472388018689282261>`, Citlali News `<a:starward11:1439878792653832253>`, Support
+  `<a:starwardfans:1509026327548657914>`.
+* **Interactive campaign tweets** (multi-photo, e.g. the "mysterious manuscript" Wuthering post) —
+  all 4 photos render in the gallery; verified against the live API.
+
 ## 🌐 How translation works (all versions)
 
 1. The script fetches the tweet from the FxTwitter API and reads its `lang` field.
@@ -176,12 +218,13 @@ Every account in `ACCOUNTS` is routed to its own webhook secret:
 
 | Setting | Example |
 |---|---|
-| `ACCOUNTS` secret | `TYPEII_EN,PomPom_HonkaiSR,Wuthering_Waves,HonkaiNA` |
+| `ACCOUNTS` secret | `TYPEII_EN,PomPom_HonkaiSR,Wuthering_Waves,HonkaiNA,Ananta_EN` |
 | Per-account secret name | `WEBHOOK_` + account name **UPPERCASED**, non-alphanumerics → `_` |
 | `TYPEII_EN` → | `WEBHOOK_TYPEII_EN` (e.g. `#zzz-news`) |
 | `PomPom_HonkaiSR` → | `WEBHOOK_POMPOM_HONKAISR` (e.g. `#hsr-news`) |
 | `Wuthering_Waves` → | `WEBHOOK_WUTHERING_WAVES` (e.g. `#wuwa-news`) |
 | `HonkaiNA` → | `WEBHOOK_HONKAINA` |
+| `Ananta_EN` → | `WEBHOOK_ANANTA_EN` (e.g. `#ananta-news`) |
 | fallback (optional) | `DISCORD_WEBHOOK_URL` — used for any account without its own secret |
 
 ### The workflow (`.github/workflows/rss_monitor.yml`)
@@ -493,11 +536,12 @@ cp .env.example .env   # then fill in your values
 
 ```env
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
-ACCOUNTS=TYPEII_EN,PomPom_HonkaiSR,Wuthering_Waves,HonkaiNA
+ACCOUNTS=TYPEII_EN,PomPom_HonkaiSR,Wuthering_Waves,HonkaiNA,Ananta_EN
 WEBHOOK_TYPEII_EN=https://discord.com/api/webhooks/...
 WEBHOOK_POMPOM_HONKAISR=https://discord.com/api/webhooks/...
 WEBHOOK_WUTHERING_WAVES=https://discord.com/api/webhooks/...
 WEBHOOK_HONKAINA=https://discord.com/api/webhooks/...
+WEBHOOK_ANANTA_EN=https://discord.com/api/webhooks/...
 SUBREDDITS=Zenlesszonezeroleaks_
 WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_=https://discord.com/api/webhooks/...
 EMBEDEZ_API_KEY=ez_...       # Reddit V2 only
@@ -531,6 +575,18 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   the file exceeded the verified ~256 MB Discord gallery limit (e.g. 4K or very long videos). The
   card still plays a smaller rendition, or links out to X when even that is too big. Tune
   `VIDEO_SIZE_LIMIT` at the top of the script if Discord's behavior ever changes.
+* **`Discord error 400 ... {"components": ["0"]}`** — old round-3 bug: a tweet with empty body (or
+  over-length text) emitted an invalid empty text component. Fixed in round 4 — text is chunked and
+  empty components are never sent. If it ever recurs, the Actions log prints the full Discord
+  response next to the tweet ID.
+* **A GIF shows as a video player instead of an animated image** — `gif.fxtwitter.com` (the WebP
+  rendition) is intermittently down (530/1033). The script keeps the mp4 player automatically and
+  logs `gif.fxtwitter.com unavailable ... keeping mp4 player`. It self-heals; nothing to do.
+* **A portrait/vertical video loads but won't play right after posting** — this was a transient
+  Discord proxy warm-up behavior (the same URLs play fine shortly after, confirmed across services).
+  Direct URLs are the default again since round 5. If you ever confirm a *persistent* portrait
+  breakage, set `PORTRAIT_PROXY = True` near the top of `main_v2.py`/`main_v3.py` to route vertical
+  videos through FxTwitter's embed proxy instead.
 * **EmbedEZ suddenly errors after an update** — expected risk (their docs warn of breaking changes);
   the Actions log prints the raw API response to help adjust field names.
 
@@ -550,6 +606,27 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 ## 🗒 Changelog
 
+* **2026-09-11 — round 5:**
+  * **Portrait-video handling revised** after further evidence: the "loads but won't play" symptom
+    is a transient Discord proxy warm-up (the same direct URLs soon play fine in Components V2), so
+    the round-4 proxy wrap is retracted to an opt-in `PORTRAIT_PROXY` toggle (default **off**) —
+    direct URLs for all videos, zero extra load on FxTwitter.
+  * **Ananta_EN added** to tracked accounts (default list, README routing table, workflow env,
+    .env example). Remember: a new account needs its `WEBHOOK_ANANTA_EN` secret *and* the matching
+    `env:` line in the workflow, plus `Ananta_EN` appended to the `ACCOUNTS` secret.
+* **2026-09-11 — round 4 (quotes, GIFs, articles, portrait fix):**
+  * **Fixed both live `400 {"components": ["0"]}` failures** (empty-text quote post + X Article) —
+    text chunking (×4 @ ≤1900) + never emitting empty components; very long tweets now render.
+  * **Quoted-post rendering** (`>>> [Quote](url) from **Name** (@user)` + quoted text + quoted
+    media, with full video handling on quote media too).
+  * **X Article / link-card images** via OpenGraph fetch of the post's `x.com` page (article banner
+    / `card_img`), falling back to the shared link's OG image (hoyo.link & co. verified working).
+  * **GIF support**: `tweet_video` GIFs render as animated WebP via `gif.fxtwitter.com` when that
+    CDN is up; graceful mp4 fallback when it 530s (maintainer-side).
+  * **Portrait-video playback fix** via the `api.fxtwitter.com/2/go?url=…` proxy wrapper.
+  * **Robust `/status/:id` API path** (the screen-name path 404s on reposts/articles/newer tweets);
+    Read Post links use the true author; `/en` translation uses the same path.
+  * **"↩️ Replying to"** line on replies; **animated custom emoji** on all buttons (X + Reddit).
 * **2026-09-11 — round 3 (smart videos):** X V2/V3 video handling rebuilt after live Discord tests
   proved **file size** (not resolution) decides playability. Each video's real size is now probed by
   HTTP HEAD; oversized (> 256 MB) videos are swapped for a smaller playable FxTwitter `formats[]`
@@ -569,4 +646,6 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   per-source logging); Reddit V2 rebuilt on the documented two-step EmbedEZ flow
   (`search` → `preview`) with graceful public-preview fallback.
 * **Earlier:** X V1/V2/V3 engines, multi-webhook routing, `/en` auto-translation, external
+  cron-job.org scheduling guide.
+nslation, external
   cron-job.org scheduling guide.
