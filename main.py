@@ -73,11 +73,16 @@ async def fetch_working_feed(session: aiohttp.ClientSession, account: str):
     logging.warning(f"Could not fetch valid RSS feed for @{account} from any instance.")
     return None
 
-async def send_discord_webhook(session: aiohttp.ClientSession, webhook_url: str, message_content: str) -> bool:
-    """Send HTTP POST request to Discord Webhook URL."""
-    payload = {"content": message_content}
+async def send_discord_webhook(session: aiohttp.ClientSession, webhook_url: str,
+                                 message_content: str, read_post_url: str) -> bool:
+    payload = {
+        "content": message_content,
+        "components": build_components(read_post_url),
+    }
+    # Discord requires this query param or components are silently dropped
+    request_url = f"{webhook_url}?with_components=true"
     try:
-        async with session.post(webhook_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
+        async with session.post(request_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
             if response.status in (200, 204):
                 logging.info("Successfully posted to Discord Webhook.")
                 return True
