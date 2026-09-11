@@ -34,7 +34,7 @@ jobs:
           WEBHOOK_POMPOM_HONKAISR: ${{ secrets.WEBHOOK_POMPOM_HONKAISR }}
           WEBHOOK_WUTHERING_WAVES: ${{ secrets.WEBHOOK_WUTHERING_WAVES }}
           WEBHOOK_HONKAINA: ${{ secrets.WEBHOOK_HONKAINA }}
-        run: python main_v3.py
+        run: python main_v2test.py
 
       - name: Commit and push updated posted_tweets.json cache
         run: |
