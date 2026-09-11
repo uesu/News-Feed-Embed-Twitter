@@ -32,7 +32,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           EMBEDEZ_API_KEY: ${{ secrets.EMBEDEZ_API_KEY }}
           WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_: ${{ secrets.WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_ }}
-        run: python reddit_main.py
+        run: python reddit_maintest.py
         # 👆 Change to reddit_main_v2.py to use the rich Components V2 version instead
 
       - name: Commit and push updated posted_reddit.json cache
