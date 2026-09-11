@@ -1,58 +1,455 @@
-# X (Twitter) RSS Feed Discord Monitor (Webhook Edition)
+# News Feed Embed — X (Twitter) + Reddit RSS → Discord Monitor (Multi-Webhook Edition)
 
-This lightweight bot monitors X (Twitter) accounts via public RSS mirrors and dispatches updates directly to a **Discord Webhook** using `fxtwitter.com` links for rich media embeds (videos, images, text).
+A lightweight, **100% serverless** bot that monitors public **X (Twitter)** accounts and **subreddits**
+via RSS mirrors, then posts new items to **different Discord channels** (one webhook per account/subreddit)
+with rich media embeds, clickable link-style buttons, and automatic **English translation** for
+non-English tweets.
 
----
-
-## ⚡ Why Webhooks?
-
-- **No Bot Tokens or Gateway required**: Uses native HTTP POST requests.
-- **Never goes offline / sleep**: Runs statelessly on a schedule (GitHub Actions or Render Cron).
-- **100% Free**: Uses 0 paid resources or sleeping web servers.
+No bot token. No gateway. No server. Just **GitHub Actions + Discord Webhooks**.
 
 ---
 
-## 🚀 Setup Instructions
+## 🌟 Credits & Acknowledgments
 
-### Step 1: Create a Discord Webhook
-1. Open your Discord server.
-2. Go to **Channel Settings** ➔ **Integrations** ➔ **Webhooks** ➔ **Create Webhook**.
-3. Copy the **Webhook URL**.
+This project stands on the shoulders of these amazing open-source projects and free services —
+please support them:
 
----
+| Project / Service | What it's used for | Links |
+|---|---|---|
+| **News-Flash-Bot** by [@cold-logic5](https://github.com/cold-logic5) | The original repository this project is based on (RSS → Discord webhook architecture) | [GitHub repo](https://github.com/cold-logic5/News-Flash-Bot) · [Author](https://github.com/cold-logic5) |
+| **Nitter** by [@zedeus](https://github.com/zedeus) | Free & open-source, privacy-focused X/Twitter front-end providing the RSS feeds | [GitHub](https://github.com/zedeus/nitter) · [nitter.net](https://nitter.net/) · [nitter.perennialte.ch](https://nitter.perennialte.ch/) · [xcancel.com](https://xcancel.com/) · 💖 [Donate via Liberapay](https://liberapay.com/zedeus) |
+| **FxTwitter / FxEmbed** | Rich X/Twitter embeds (auto-unfurl) + the free API used for media, stats, and translation | [fxtwitter.com](https://fxtwitter.com) · [api.fxtwitter.com](https://api.fxtwitter.com) |
+| **EmbedEZ** | Rich Reddit embeds (redditez.com mirror) + the provider API used by Reddit V2 | [embedez.com](https://embedez.com/) · [redditez.com](https://www.redditez.com) · [API docs](https://embedez.com/docs) |
+| **Embeddit** by [@DeltAndy123](https://github.com/DeltAndy123) | Alternative Reddit embed mirror (one of the buttons) | [GitHub](https://github.com/DeltAndy123/Embeddit) · [embeddit.deltandy.me](https://embeddit.deltandy.me) |
+| **vxReddit** by [@dylanpdx](https://github.com/dylanpdx) | Alternative Reddit embed mirror (one of the buttons) | [GitHub](https://github.com/dylanpdx/vxReddit) · [vxreddit.com](https://vxreddit.com) |
+| **Redlib** | Reddit front-end mirror used as an RSS fallback source | [redlib.perennialte.ch](https://redlib.perennialte.ch) |
+| **cron-job.org** | Free external scheduler that triggers the workflows reliably every 10 minutes | [cron-job.org](https://cron-job.org) |
+| **GitHub Actions** | Runs everything on a schedule, for free | — |
+| **Discord Webhooks** | Delivers messages to channels statelessly | — |
 
-### Step 2: Option A — GitHub Actions (Recommended & 100% Free)
-
-1. Push this repository to your **GitHub account**.
-2. Go to your Repository on GitHub ➔ **Settings** ➔ **Secrets and variables** ➔ **Actions**.
-3. Click **New repository secret**:
-   - **Name**: `DISCORD_WEBHOOK_URL`
-   - **Value**: Your copied Discord Webhook URL
-4. Go to the **Actions** tab in GitHub and ensure workflows are enabled.
-5. The bot will automatically check feeds **every 10 minutes**!
-
----
-
-### Step 3: Option B — Render Cron Job
-
-If hosting on Render:
-1. Create a **Cron Job** on Render.
-2. **Build Command**: `pip install -r requirements.txt`
-3. **Command**: `python main.py`
-4. **Schedule**: `*/10 * * * *` (every 10 minutes)
-5. Add `DISCORD_WEBHOOK_URL` in **Environment Variables**.
+Huge respect and gratitude to [@cold-logic5](https://github.com/cold-logic5) for the original
+architecture, and to the Nitter project — if you can, [support zedeus on Liberapay](https://liberapay.com/zedeus).
 
 ---
 
-## 🛠 Local Testing
+## ✨ Features
 
-Create a `.env` file based on `.env.example`:
+- 🐦 **X/Twitter monitor** with **three interchangeable render engines**:
+  - **V1** — classic text + fxtwitter auto-embed, buttons below.
+  - **V2** — Discord *Components V2* card (container, gallery, stats), buttons **outside** the card.
+  - **V3** — same rich card, but buttons **nested inside** the container.
+- 🌐 **Automatic English translation** — non-English tweets show a *"Translated from X"* block with the
+  original text preserved, via FxTwitter's `/en` translation endpoint (works on V1/V2/V3).
+- 🎯 **Multi-webhook routing** — each tracked X account posts to its own Discord channel
+  (`WEBHOOK_<ACCOUNT>` secrets), with an optional catch-all fallback webhook.
+- 📰 **Reddit monitor** with two engines:
+  - **V1** — free, no API key: posts the `redditez.com` link and lets Discord auto-embed it,
+    plus **Read Post / Embeddit / vxReddit** mirror buttons.
+  - **V2** — rich *Components V2* card built from the **EmbedEZ API** (title, media gallery, stats).
+- 🔘 **Link-style buttons** with emoji support (Unicode **or** custom server emoji IDs).
+- 📊 **Stats line** — replies/retweets/likes/views (X) or comments/shares/likes/views (Reddit V2).
+- 🕙 **Reliable 10-minute automation** via an external cron trigger (GitHub's built-in `schedule` is
+  kept only as a backup — it's documented as best-effort and can lag or be skipped).
+- 💾 **Self-maintaining memory** — posted IDs are cached in JSON files committed back to the repo by
+  `github-actions[bot]`, so nothing is ever posted twice.
+
+---
+
+## 🗂 Repository Contents
+
+```
+├── .github/
+│   └── workflows/
+│       ├── rss_monitor.yml      # X/Twitter monitor (choose V1/V2/V3 inside)
+│       └── reddit_monitor.yml   # Reddit monitor (choose V1/V2 inside)
+├── main.py                      # X/Twitter — V1 (classic content + fxtwitter embed)
+├── main_v2.py                   # X/Twitter — V2 (Components V2, buttons OUTSIDE)
+├── main_v3.py                   # X/Twitter — V3 (Components V2, buttons INSIDE)
+├── reddit_main.py               # Reddit — V1 (free, redditez auto-embed)
+├── reddit_main_v2.py            # Reddit — V2 (Components V2 via EmbedEZ API)
+├── posted_tweets.json           # X cache (auto-committed) — start with: []
+├── posted_reddit.json           # Reddit cache (auto-committed) — start with: []
+├── requirements.txt             # feedparser, aiohttp, python-dotenv
+├── .env.example                 # local testing template
+└── .gitignore                   # (keep the posted_*.json force-add exception in workflow)
+```
+
+---
+
+# 🐦 X (Twitter) Monitor
+
+## Choosing a version (V1 vs V2 vs V3)
+
+All three do the same job with the same multi-webhook routing and translation — they only differ in
+**how the Discord message looks**:
+
+| | `main.py` (V1) | `main_v2.py` (V2) | `main_v3.py` (V3) |
+|---|---|---|---|
+| Message style | Plain text + fxtwitter link → Discord **auto-unfurls** the embed | Fully custom **Components V2** bordered card (type 17 container + text + media gallery + stats) | Same custom card as V2 |
+| Buttons | Action row below the embed | Action row **outside/below** the container | Action row **nested inside** the container |
+| Data source | RSS + FxTwitter API (light, lang check only) | RSS + FxTwitter API (full tweet JSON) | RSS + FxTwitter API (full tweet JSON) |
+| Custom accent color | n/a | ✅ (per-tweet `color`) | ✅ (per-tweet `color`) |
+| Switch to it | `run: python main.py` | `run: python main_v2.py` | `run: python main_v3.py` |
+
+**To switch versions:** open `.github/workflows/rss_monitor.yml` and change the run line:
+
+```yaml
+run: python main.py        # V1
+# run: python main_v2.py   # V2
+# run: python main_v3.py   # V3
+```
+
+Commit — done. All three were verified working end-to-end (feeds, translation, per-channel routing,
+buttons, and cache commits).
+
+## 🌐 How translation works (all versions)
+
+1. The script fetches the tweet from the FxTwitter API and reads its `lang` field.
+2. If it's not English, it re-fetches `https://api.fxtwitter.com/<account>/status/<id>/en`, which
+   returns FxTwitter's translated text.
+3. The message shows **🌐 Translated from {Language}** then the translation, then an
+   **Original text** block with the untranslated tweet. The *Read Post* button points to the `/en`
+   fxtwitter page too.
+4. If FxTwitter can't translate a specific post, the script gracefully posts the original text instead.
+5. `LANGUAGE_NAMES` at the top of each file maps ISO codes (ja, ko, zh, fr, …) to readable names —
+   extend it if you track accounts in other languages.
+
+## 🎯 Multi-webhook routing
+
+Every account in `ACCOUNTS` is routed to its own webhook secret:
+
+| Setting | Example |
+|---|---|
+| `ACCOUNTS` secret | `TYPEII_EN,PomPom_HonkaiSR,Wuthering_Waves,HonkaiNA` |
+| Per-account secret name | `WEBHOOK_` + account name **UPPERCASED**, non-alphanumerics → `_` |
+| `TYPEII_EN` → | `WEBHOOK_TYPEII_EN` (e.g. `#zzz-news`) |
+| `PomPom_HonkaiSR` → | `WEBHOOK_POMPOM_HONKAISR` (e.g. `#hsr-news`) |
+| `Wuthering_Waves` → | `WEBHOOK_WUTHERING_WAVES` (e.g. `#wuwa-news`) |
+| `HonkaiNA` → | `WEBHOOK_HONKAINA` |
+| fallback (optional) | `DISCORD_WEBHOOK_URL` — used for any account without its own secret |
+
+### The workflow (`.github/workflows/rss_monitor.yml`)
+
+```yaml
+name: RSS Feed Monitor
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # backup only — GitHub cron is best-effort
+  workflow_dispatch:          # allows manual + external-cron triggering
+
+permissions:
+  contents: write
+
+jobs:
+  check-rss:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run RSS Feed Monitor
+        env:
+          ACCOUNTS: ${{ secrets.ACCOUNTS }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WEBHOOK_TYPEII_EN: ${{ secrets.WEBHOOK_TYPEII_EN }}
+          WEBHOOK_POMPOM_HONKAISR: ${{ secrets.WEBHOOK_POMPOM_HONKAISR }}
+          WEBHOOK_WUTHERING_WAVES: ${{ secrets.WEBHOOK_WUTHERING_WAVES }}
+          WEBHOOK_HONKAINA: ${{ secrets.WEBHOOK_HONKAINA }}
+        run: python main_v3.py   # ← switch to main.py / main_v2.py here
+
+      - name: Commit and push updated posted_tweets.json cache
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add -f posted_tweets.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: update posted_tweets.json cache" && git push)
+```
+
+> Every webhook secret you add must get a matching `WEBHOOK_...` line in the `env:` block —
+> that's the one manual step when adding a new account.
+
+## 🔘 Customizing the buttons (all files)
+
+Near the top of each script:
+
+```python
+READ_POST_LABEL = "Read Post"
+READ_POST_EMOJI = {"name": "📖"}        # Unicode emoji — or None
+STATIC_BUTTONS = [
+    {"label": "Citlali News", "url": "https://discord.gg/HyrVP9wRXu", "emoji": {"name": "✨"}},
+    {"label": "Support",     "url": "https://ko-fi.com/jieunlatte",   "emoji": {"name": "☕"}},
+]
+```
+
+* Max **5 buttons per row** (Discord limit).
+* **Custom server emoji:** type `\:emojiname:` in Discord to get its ID, then use:
+  `"emoji": {"id": "123456789012345678", "name": "emojiname", "animated": False}`
+  (`animated: True` for GIF emoji). Full custom *pictures* on buttons are not possible — Discord only
+  supports label + one emoji.
+
+---
+
+# 📰 Reddit Monitor
+
+Monitors subreddits through RSS (sorted by *new*) and posts each new thread to that subreddit's own
+Discord channel.
+
+## V1 vs V2
+
+| | `reddit_main.py` (V1) | `reddit_main_v2.py` (V2) |
+|---|---|---|
+| Cost | **Free — no API key at all** | Requires an **EmbedEZ API key** (paid credits — see concerns below) |
+| Look | Plain message + `redditez.com` link → Discord auto-embeds it (same idea as fxtwitter) | Rich **Components V2** card (title, author, media gallery, 💬/🔁/❤️/👁️ stats, buttons inside) |
+| Buttons | Read Post (redditez) · Embeddit · vxReddit + your static buttons | Same set, nested inside the card |
+| Switch to it | `run: python reddit_main.py` | `run: python reddit_main_v2.py` |
+
+### Secrets
+
+| Secret | Value |
+|---|---|
+| `SUBREDDITS` | Comma-separated subreddit names, e.g. `Zenlesszonezeroleaks_` |
+| `WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_` | Webhook for that sub's channel (rule: `WEBHOOK_REDDIT_` + UPPERCASE name, non-alphanumerics → `_`) |
+| `EMBEDEZ_API_KEY` | **V2 only** — from your embedez.com dashboard |
+| `DISCORD_WEBHOOK_URL` *(optional)* | Catch-all fallback |
+
+### The workflow (`.github/workflows/reddit_monitor.yml`)
+
+```yaml
+name: Reddit Feed Monitor
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-reddit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Reddit Feed Monitor
+        env:
+          SUBREDDITS: ${{ secrets.SUBREDDITS }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EMBEDEZ_API_KEY: ${{ secrets.EMBEDEZ_API_KEY }}
+          WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_: ${{ secrets.WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_ }}
+        run: python reddit_main.py   # ← switch to reddit_main_v2.py for the rich card
+
+      - name: Commit and push updated posted_reddit.json cache
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add -f posted_reddit.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: update posted_reddit.json cache" && git push)
+```
+
+Create `posted_reddit.json` with `[]` as its initial content (first run posts only the newest thread,
+by design).
+
+## ⚠️ Reddit V2 (Components V2) — concerns you should know
+
+The V2 script was rebuilt against the **currently documented** EmbedEZ API, but please read these
+points before relying on it:
+
+1. **The API key is not fully free.** The embedez dashboard shows a *credits* balance (fresh accounts
+   start around 100 credits; more requires payment, and payments "may take up to 5 minutes to
+   process"). **Every new post costs 2 API calls** (one `search` + one `preview`). If you don't want
+   to spend credits, just use **Reddit V1** — it needs no key at all.
+2. **Documented two-step flow.** V2 uses only the endpoints in the current OpenAPI docs:
+   `GET /api/v1/providers/search?url=…` → returns a `key`, then
+   `GET /api/v1/providers/preview?search_key=…` with header `Authorization: Bearer <ez_key>`.
+   The older unofficial `/providers/combined?q=` endpoint from early docs is **no longer documented**
+   and is not used.
+3. **Graceful no-key fallback.** Without a valid key, the preview endpoint still returns *public* data
+   (author, title, one thumbnail). V2 detects that and posts a **limited card** with a small
+   `ℹ️ Limited preview` note instead of skipping the post.
+4. **Defensive field parsing.** Media URLs are read from `media[].url` **or** the legacy
+   `media[].source.url` shape; HTML in preview titles is stripped automatically. Even so —
+5. **EmbedEZ warns the API may break.** Their docs explicitly say *"large changes will be made to the
+   API in the future, and these might break the current API."* If posts suddenly fail, read the Actions
+   log — it prints the exact API response — and check their release notes/docs for field renames.
+6. **A true "click button → switch embed mirror (redditez → Embeddit → vxReddit)" rotation is not
+   possible** with webhooks alone: interactive buttons need a 24/7 bot process answering Discord
+   interactions, which defeats this project's stateless design. That's why all three mirrors are shown
+   as separate always-visible link buttons.
+
+## 🔧 Reddit V1 fix (2026-09-11) — why the first run failed
+
+Your first V1 test logged `Could not fetch valid RSS feed for r/*** from any instance.` The cause was
+verified live:
+
+| Source (in code order) | Result |
+|---|---|
+| `redlib.perennialte.ch` | **HTTP 403** — Cloudflare "Just a moment…" challenge |
+| `old.reddit.com` | HTTP 200 but an **HTML "Welcome to Reddit" interstitial**, zero RSS entries |
+| `www.reddit.com` | ✅ **real Atom feed, 25 entries** — but it wasn't in the source list! |
+
+`reddit_main.py` (and V2) now:
+* try **`https://www.reddit.com/r/<sub>/new/.rss` first**, with `old.reddit.com` and redlib as fallbacks;
+* **validate** the response actually contains `/comments/` permalinks before accepting it (old.reddit's
+  HTML page is now properly rejected);
+* **log exactly why each source was skipped**, so future breakage is diagnosable from the Actions log.
+
+If `www.reddit.com` ever starts blocking GitHub's datacenter IPs for you, open the Actions log —
+you'll see the per-source reasons — and just reorder/replace entries in `REDDIT_RSS_INSTANCES`.
+
+---
+
+# 🛠 Full Setup Guide
+
+## Step 0 — Make the repo your own (**do NOT fork**)
+
+Forked repos get Actions/schedules disabled and auto-disabled again after ~60 days of inactivity —
+your bot would silently stop. Instead:
+
+1. On the source repo: **Code → Download ZIP**, then unzip locally.
+2. Create a **brand-new empty repository** on your GitHub account.
+3. Click *"uploading an existing file"* and drag in **all** files — including the hidden `.github`
+   folder (enable *show hidden files* in your file explorer first!).
+4. Commit. Since it's a fresh, non-fork repo, workflow **read/write** permissions work out of the box
+   (verify at *Settings → Actions → General → Workflow permissions → Read and write*).
+
+## Step 1 — Create Discord webhooks (one per channel)
+
+For each target channel: *Channel Settings → Integrations → Webhooks → New Webhook → Copy URL.*
+
+## Step 2 — Add repository secrets
+
+*Repo → Settings → Secrets and variables → Actions → New repository secret*, then add the ones you
+need from the X and Reddit tables above (`ACCOUNTS`, `WEBHOOK_<ACCOUNT>` per account, `SUBREDDITS`,
+`WEBHOOK_REDDIT_<SUB>` per subreddit, `EMBEDEZ_API_KEY` only if using Reddit V2, optional
+`DISCORD_WEBHOOK_URL` fallback).
+
+## Step 3 — Reset the caches for a fresh start
+
+Edit `posted_tweets.json` and `posted_reddit.json` to contain just:
+
+```json
+[]
+```
+
+On the first run the bots post only the **single newest item** per account/subreddit (by design — no
+channel flooding).
+
+## Step 4 — Reliable 10-minute automation (external trigger)
+
+GitHub's built-in `schedule:` can lag 15–60 min or skip runs under load, so we replicate the original
+author's "Manually run by …" pattern with a free external cron:
+
+1. **Create a PAT:** GitHub → *Settings → Developer settings → Personal access tokens (classic) →
+   Generate new token* → check **`workflow`** (and `repo` if private) → copy it.
+2. Sign up at [cron-job.org](https://cron-job.org) (free) and create a job **per workflow**:
+   * **URL:**
+     `https://api.github.com/repos/<YOU>/<REPO>/actions/workflows/rss_monitor.yml/dispatches`
+     (and a second job for `reddit_monitor.yml`)
+   * **Method:** `POST` · **Crontab:** `*/10 * * * *`
+   * **Headers:**
+     | Key | Value |
+     |---|---|
+     | `Authorization` | `token <YOUR_PAT>` |
+     | `Accept` | `application/vnd.github+json` |
+     | `Content-Type` | `application/json` |
+     | `X-GitHub-Api-Version` | `2026-03-10` *(optional, future-proof)* |
+   * **Body:** `{"ref":"main"}` (match your default branch name)
+3. **Perform test run** → expect `204 No Content` (or `200 OK`), then check the Actions tab for a run
+   labeled *Manually run by you*. `401` = bad token/scope; `404` = wrong repo/workflow/branch name.
+
+Keep the in-file `schedule:` cron as a harmless backup — occasional extra *Scheduled* runs are fine.
+
+## Step 5 — Test end-to-end
+
+*Actions → select the workflow → Run workflow*, then check: the right Discord channels got the right
+posts, buttons render, and the cache file shows a new `github-actions[bot]` commit.
+
+## (Optional) Render Cron instead of GitHub Actions
+
+Create a **Cron Job** on Render: build `pip install -r requirements.txt`, command
+`python main.py` (or any other engine file), schedule `*/10 * * * *`, and add the same env vars there.
+
+---
+
+## 💻 Local Testing
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env   # then fill in your values
+```
+
+`.env` example:
+
 ```env
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
-ACCOUNTS=sunnewstamil,News18TamilNadu,polimernews,NewsTamilTV24x7
+ACCOUNTS=TYPEII_EN,PomPom_HonkaiSR,Wuthering_Waves,HonkaiNA
+WEBHOOK_TYPEII_EN=https://discord.com/api/webhooks/...
+WEBHOOK_POMPOM_HONKAISR=https://discord.com/api/webhooks/...
+WEBHOOK_WUTHERING_WAVES=https://discord.com/api/webhooks/...
+WEBHOOK_HONKAINA=https://discord.com/api/webhooks/...
+SUBREDDITS=Zenlesszonezeroleaks_
+WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_=https://discord.com/api/webhooks/...
+EMBEDEZ_API_KEY=ez_...       # Reddit V2 only
 ```
 
-Run locally:
-```bash
-python main.py
-```
+Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py` /
+`python reddit_main.py` / `python reddit_main_v2.py`.
+
+---
+
+## 🚨 Troubleshooting
+
+* **Buttons don't render.** Every webhook POST must use the query param `?with_components=true` —
+  Discord *silently drops* components without it (already handled in all scripts; don't remove it).
+  Rich-card versions also set the `IS_COMPONENTS_V2` flag (`1 << 15`).
+* **`Could not fetch valid RSS feed for @…` / `r/…`** — public mirrors rotate/die. For X, swap
+  `RSS_INSTANCES` with currently-live Nitter mirrors; for Reddit, see the *Reddit V1 fix* section and
+  read the new per-source log lines.
+* **`ValueError: invalid literal for int() with base 16: 'None'`** — old V3 bug when FxTwitter returns
+  `"color": null`; fixed via the `hex_color_to_int()` helper with a safe default.
+* **`Deprecation` / `Node.js 20 is deprecated` warnings in Actions logs** — cosmetic, safe to ignore
+  (runs are forced onto Node 24).
+* **No run at 10-minute marks** — GitHub's native cron is best-effort; that's why the external
+  cron-job.org trigger exists. Also note GitHub auto-disables `schedule:` after 60 days of repo
+  inactivity — the cache auto-commits usually count as activity, and the external trigger is immune.
+* **Reddit V2 posts "Limited preview" cards** — your `EMBEDEZ_API_KEY` is missing/invalid or out of
+  credits; add a valid key (and watch the credit balance), or switch to free V1.
+* **First run posts only one item per account** — intentional anti-flood behavior; normal backfill
+  starts on subsequent runs.
+* **EmbedEZ suddenly errors after an update** — expected risk (their docs warn of breaking changes);
+  the Actions log prints the raw API response to help adjust field names.
+
+---
+
+## 📄 Final notes
+
+* All engines are independent — mix and match freely (e.g. X on V3, Reddit on V1).
+* Be nice to the free services this project uses: don't shorten the polling interval below 10 minutes,
+  cache stays committed so nothing is fetched/posted twice, and consider donating to Nitter's author.
+* All trademarks belong to their respective owners; this project is an unofficial, non-affiliated
+  automation tool for personal servers.
