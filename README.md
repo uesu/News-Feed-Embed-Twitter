@@ -18,8 +18,8 @@ please support them:
 |---|---|---|
 | **News-Flash-Bot** by [@cold-logic5](https://github.com/cold-logic5) | The original repository this project is based on (RSS → Discord webhook architecture) | [GitHub repo](https://github.com/cold-logic5/News-Flash-Bot) · [Author](https://github.com/cold-logic5) |
 | **Nitter** by [@zedeus](https://github.com/zedeus) | Free & open-source, privacy-focused X/Twitter front-end providing the RSS feeds | [GitHub](https://github.com/zedeus/nitter) · [nitter.net](https://nitter.net/) · [nitter.perennialte.ch](https://nitter.perennialte.ch/) · [xcancel.com](https://xcancel.com/) · 💖 [Donate via Liberapay](https://liberapay.com/zedeus) |
-| **FxTwitter / FxEmbed** | Rich X/Twitter embeds (auto-unfurl) + the free API used for media, stats, and translation | [fxtwitter.com](https://fxtwitter.com) · [api.fxtwitter.com](https://api.fxtwitter.com) |
-| **EmbedEZ** | Rich Reddit embeds (redditez.com mirror) + the provider API used by Reddit V2 | [embedez.com](https://embedez.com/) · [redditez.com](https://www.redditez.com) · [API docs](https://embedez.com/docs) |
+| **FxTwitter / FxEmbed** | Rich X/Twitter embeds (auto-unfurl) + the free API used for media, stats, and translation | [Github](https://fxtwitter.com) · [FxEmbed Docs](https://docs.fxembed.com/) |
+| **EmbedEZ** | Rich Reddit embeds (redditez.com mirror) + the provider API used by Reddit V2 | [embedez.com](https://embedez.com/) · [API docs](https://embedez.com/docs) |
 | **Embeddit** by [@DeltAndy123](https://github.com/DeltAndy123) | Alternative Reddit embed mirror (credited — its button was removed in the 2026-09-11 trim) | [GitHub](https://github.com/DeltAndy123/Embeddit) · [embeddit.deltandy.me](https://embeddit.deltandy.me) |
 | **vxReddit** by [@dylanpdx](https://github.com/dylanpdx) | Alternative Reddit embed mirror (credited — its button was removed in the 2026-09-11 trim) | [GitHub](https://github.com/dylanpdx/vxReddit) · [vxreddit.com](https://vxreddit.com) |
 | **Redlib** | Reddit front-end mirror used as an RSS fallback source | [redlib.perennialte.ch](https://redlib.perennialte.ch) |
