@@ -1,3 +1,10 @@
+# ---------------------------------------------------------------------------
+# 📋 Plain Embed V1 Edition — main.py
+# ---------------------------------------------------------------------------
+# To use it: change the workflow's run: python main.py
+# line to run: main.py
+# Note: buttons are outside the embed v1
+# ---------------------------------------------------------------------------
 import os
 import re
 import json
@@ -17,7 +24,6 @@ load_dotenv()
 ACCOUNTS_STR = os.getenv("ACCOUNTS", "TYPEII_EN,PomPom_HonkaiSR,Wuthering_Waves,HonkaiNA")
 ACCOUNTS = [acc.strip() for acc in ACCOUNTS_STR.split(",") if acc.strip()]
 
-# Optional fallback webhook used ONLY if an account has no dedicated webhook secret
 DEFAULT_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 CACHE_FILE = "posted_tweets.json"
@@ -31,41 +37,40 @@ RSS_INSTANCES = [
     "https://xcancel.com",
 ]
 
+FXTWITTER_API_BASE = "https://api.fxtwitter.com"
+
 # ---------------------------------------------------------------------------
-# 🔘 BUTTON CONFIGURATION — customize labels, URLs, and emojis here
-# Discord button "style" values: 1=Blurple 2=Grey 3=Green 4=Red 5=Link
-# Link buttons (style 5) MUST use "url" and must NOT use "custom_id"
+# 🌐 LANGUAGE NAMES (for the "Translated from X" note)
+# ---------------------------------------------------------------------------
+LANGUAGE_NAMES = {
+    "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "fr": "French",
+    "de": "German", "es": "Spanish", "pt": "Portuguese", "ru": "Russian",
+    "ar": "Arabic", "it": "Italian", "id": "Indonesian", "th": "Thai",
+    "vi": "Vietnamese", "tl": "Filipino", "hi": "Hindi", "tr": "Turkish",
+    "nl": "Dutch", "pl": "Polish", "uk": "Ukrainian", "sv": "Swedish",
+}
+
+# ---------------------------------------------------------------------------
+# 🔘 BUTTON CONFIGURATION
 # ---------------------------------------------------------------------------
 READ_POST_LABEL = "Read Post"
-READ_POST_EMOJI = {"name": "🔗"}          # unicode emoji; set to None to remove
+READ_POST_EMOJI = {"name": "🔗"}
 
 STATIC_BUTTONS = [
     {
         "label": "Citlali News",
         "url": "https://discord.gg/HyrVP9wRXu",
-        "emoji": {"name": "📰"},           # change/remove as you like
+        "emoji": {"name": "📰"},
     },
     {
         "label": "Support",
         "url": "https://ko-fi.com/jieunlatte",
         "emoji": {"name": "☕"},
     },
-    # To add a 4th button (max 5 total per row), copy this block:
-    # {
-    #     "label": "Your Label",
-    #     "url": "https://example.com",
-    #     "emoji": {"name": "✨"},
-    # },
 ]
 
 
 def get_webhook_for_account(account: str) -> str | None:
-    """
-    Looks up a dedicated Discord webhook secret for this account.
-    Expected env var name: WEBHOOK_<SANITIZED_ACCOUNT_NAME>
-    e.g. account 'Wuthering_Waves' -> WEBHOOK_WUTHERING_WAVES
-    Falls back to DISCORD_WEBHOOK_URL if no dedicated one is found.
-    """
     sanitized = re.sub(r"[^A-Za-z0-9]", "_", account).upper()
     env_key = f"WEBHOOK_{sanitized}"
     webhook = os.getenv(env_key)
@@ -120,8 +125,22 @@ async def fetch_working_feed(session: aiohttp.ClientSession, account: str):
     return None
 
 
+async def fetch_tweet_lang(session: aiohttp.ClientSession, account: str, tweet_id: str) -> str | None:
+    """Lightweight check of the tweet's source language via the FxTwitter API."""
+    url = f"{FXTWITTER_API_BASE}/{account}/status/{tweet_id}"
+    headers = {"User-Agent": "NewsFlashBot/1.0"}
+    try:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            if response.status == 200:
+                data = await response.json()
+                tweet = data.get("tweet") or data.get("status") or {}
+                return (tweet.get("lang") or "").lower()
+    except Exception as e:
+        logging.debug(f"Could not determine language for {tweet_id}: {e}")
+    return None
+
+
 def build_components(read_post_url: str) -> list:
-    """Builds the Discord action row with Read Post + custom static buttons."""
     read_button = {
         "type": 2,
         "style": 5,
@@ -143,7 +162,7 @@ def build_components(read_post_url: str) -> list:
             button_obj["emoji"] = btn["emoji"]
         buttons.append(button_obj)
 
-    return [{"type": 1, "components": buttons[:5]}]  # Discord max 5 buttons/row
+    return [{"type": 1, "components": buttons[:5]}]
 
 
 async def send_discord_webhook(session: aiohttp.ClientSession, webhook_url: str,
@@ -152,7 +171,6 @@ async def send_discord_webhook(session: aiohttp.ClientSession, webhook_url: str,
         "content": message_content,
         "components": build_components(read_post_url),
     }
-    # Discord requires this query param or components are silently dropped
     request_url = f"{webhook_url}?with_components=true"
     try:
         async with session.post(request_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
@@ -243,7 +261,16 @@ async def main():
                 unique_key = tweet_info["unique_key"]
 
                 fxtwitter_url = f"https://fxtwitter.com/{account}/status/{tweet_id}"
-                message = f"📰 **New update from @{account}**\n{fxtwitter_url}"
+
+                # 🌐 Check language; if not English, switch to the /en translated link
+                lang = await fetch_tweet_lang(session, account, tweet_id)
+                translation_note = ""
+                if lang and lang != "en":
+                    fxtwitter_url += "/en"
+                    lang_name = LANGUAGE_NAMES.get(lang, lang.upper())
+                    translation_note = f"📑 *Translated from {lang_name}*\n"
+
+                message = f"📰 **New update from @{account}**\n{translation_note}{fxtwitter_url}"
 
                 success = await send_discord_webhook(session, webhook_url, message, fxtwitter_url)
                 if success:
