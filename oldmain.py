@@ -4,7 +4,7 @@
 # To use it: change the workflow's run: python main.py
 # line to run: main.py
 # Note: buttons are outside the embed v1
-# Note: No translation
+# Note: No translations
 # ---------------------------------------------------------------------------
 import os
 import re
