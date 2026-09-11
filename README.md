@@ -20,8 +20,8 @@ please support them:
 | **Nitter** by [@zedeus](https://github.com/zedeus) | Free & open-source, privacy-focused X/Twitter front-end providing the RSS feeds | [GitHub](https://github.com/zedeus/nitter) · [nitter.net](https://nitter.net/) · [nitter.perennialte.ch](https://nitter.perennialte.ch/) · [xcancel.com](https://xcancel.com/) · 💖 [Donate via Liberapay](https://liberapay.com/zedeus) |
 | **FxTwitter / FxEmbed** | Rich X/Twitter embeds (auto-unfurl) + the free API used for media, stats, and translation | [fxtwitter.com](https://fxtwitter.com) · [api.fxtwitter.com](https://api.fxtwitter.com) |
 | **EmbedEZ** | Rich Reddit embeds (redditez.com mirror) + the provider API used by Reddit V2 | [embedez.com](https://embedez.com/) · [redditez.com](https://www.redditez.com) · [API docs](https://embedez.com/docs) |
-| **Embeddit** by [@DeltAndy123](https://github.com/DeltAndy123) | Alternative Reddit embed mirror (one of the buttons) | [GitHub](https://github.com/DeltAndy123/Embeddit) · [embeddit.deltandy.me](https://embeddit.deltandy.me) |
-| **vxReddit** by [@dylanpdx](https://github.com/dylanpdx) | Alternative Reddit embed mirror (one of the buttons) | [GitHub](https://github.com/dylanpdx/vxReddit) · [vxreddit.com](https://vxreddit.com) |
+| **Embeddit** by [@DeltAndy123](https://github.com/DeltAndy123) | Alternative Reddit embed mirror (credited — its button was removed in the 2026-09-11 trim) | [GitHub](https://github.com/DeltAndy123/Embeddit) · [embeddit.deltandy.me](https://embeddit.deltandy.me) |
+| **vxReddit** by [@dylanpdx](https://github.com/dylanpdx) | Alternative Reddit embed mirror (credited — its button was removed in the 2026-09-11 trim) | [GitHub](https://github.com/dylanpdx/vxReddit) · [vxreddit.com](https://vxreddit.com) |
 | **Redlib** | Reddit front-end mirror used as an RSS fallback source | [redlib.perennialte.ch](https://redlib.perennialte.ch) |
 | **cron-job.org** | Free external scheduler that triggers the workflows reliably every 10 minutes | [cron-job.org](https://cron-job.org) |
 | **GitHub Actions** | Runs everything on a schedule, for free | — |
@@ -43,10 +43,26 @@ architecture, and to the Nitter project — if you can, [support zedeus on Liber
 - 🎯 **Multi-webhook routing** — each tracked X account posts to its own Discord channel
   (`WEBHOOK_<ACCOUNT>` secrets), with an optional catch-all fallback webhook.
 - 📰 **Reddit monitor** with two engines:
-  - **V1** — free, no API key: posts the `redditez.com` link and lets Discord auto-embed it,
-    plus **Read Post / Embeddit / vxReddit** mirror buttons.
-  - **V2** — rich *Components V2* card built from the **EmbedEZ API** (title, media gallery, stats).
-- 🔘 **Link-style buttons** with emoji support (Unicode **or** custom server emoji IDs).
+  - **V1** — free, no API key: posts the `redditez.com` link and lets Discord auto-embed it.
+    If the thread links to YouTube, the bare YouTube URL is appended on its own line too, so a
+    **playable YouTube player** appears next to the reddit embed.
+  - **V2** — rich *Components V2* card built from the **EmbedEZ API** (title, media gallery, stats,
+    🕐 Discord timestamp).
+- 🔘 **Link-style buttons** with emoji support (Unicode **or** custom server emoji IDs). Reddit
+  buttons: **Read Post → the original `reddit.com` thread**, **▶️ YouTube** (only when a link is
+  detected), **Citlali News**, **Support**.
+- 🔗 **Clickable hashtags & mentions (X V2/V3)** — `#tag` → `x.com/hashtag/tag` and `@user` →
+  `x.com/user` as masked links, exactly like fxtwitter auto-embeds.
+- 🎬 **Smart video handling (X V2/V3)** — Discord's media gallery can't play large video files, so
+  every video's **real file size is probed** (HTTP HEAD) before posting. Oversized videos are
+  swapped for the biggest **smaller mp4 variant** from FxTwitter's `formats[]` that still fits
+  (stays playable!), with a thumbnail + "Watch on X" link as last resort. Resolution is irrelevant —
+  it's all about file size (see the live test table below).
+- 🕐 **Exact timestamps (V2/V3, X & Reddit)** — every card's stats line ends with a Discord-native
+  `<t:…:f>` timestamp; hover/tap for the post's exact date & time.
+- 🛡 **Mod-queue safe (Reddit)** — a 48-hour freshness window keyed on the RSS *updated* stamp means
+  posts approved from a subreddit's moderator queue hours (or a day) later still get posted —
+  they're never left out.
 - 📊 **Stats line** — replies/retweets/likes/views (X) or comments/shares/likes/views (Reddit V2).
 - 🕙 **Reliable 10-minute automation** via an external cron trigger (GitHub's built-in `schedule` is
   kept only as a backup — it's documented as best-effort and can lag or be skipped).
@@ -69,6 +85,8 @@ architecture, and to the Nitter project — if you can, [support zedeus on Liber
 ├── reddit_main_v2.py            # Reddit — V2 (Components V2 via EmbedEZ API)
 ├── posted_tweets.json           # X cache (auto-committed) — start with: []
 ├── posted_reddit.json           # Reddit cache (auto-committed) — start with: []
+├── PRIVACY_POLICY.md            # privacy policy (the bot collects no personal data)
+├── TERMS_OF_SERVICE.md          # terms of service / acceptable use
 ├── requirements.txt             # feedparser, aiohttp, python-dotenv
 ├── .env.example                 # local testing template
 └── .gitignore                   # (keep the posted_*.json force-add exception in workflow)
@@ -101,6 +119,44 @@ run: python main.py        # V1
 
 Commit — done. All three were verified working end-to-end (feeds, translation, per-channel routing,
 buttons, and cache commits).
+
+## 🆕 X V2/V3 card behaviors (2026-09-11 update)
+
+* **Clickable hashtags & mentions** — `#tag` → `[#tag](https://x.com/hashtag/tag)`, `@user` →
+  `[@user](https://x.com/user)`; bare http(s) links are auto-linked by Discord as before.
+  Regex lookbehinds protect URLs like `example.com/path#anchor` and emails like `a@b.com` from being
+  linkified by accident.
+* **Smart video handling (revised after live testing).** Your tests proved the breakage is about
+  **file size, not resolution**:
+
+  | Video | Real size (probed) | Components V2 gallery |
+  |---|---|---|
+  | 3840×2160 · 24 min | 905 MB | ❌ "image failed to load" |
+  | 1920×1080 · 56 min | 578 MB | ⚠️ loads, won't play |
+  | 2560×1440 · 5:12 | 405 MB | ❌ "image failed to load" |
+  | 2560×1440 · 1:28 | 120 MB | ✅ plays |
+  | 3440×1440 · 0:24 | 22 MB | ✅ plays |
+  | 2340×1080 · 4:29 | 191 MB | ✅ plays |
+
+  So the scripts now **probe every video's real file size** with an HTTP HEAD request
+  (`Content-Length`, with a Range-GET backup) and apply these rules — nothing is forced when the
+  size can't be determined:
+  * **≤ 256 MB** (`VIDEO_SIZE_LIMIT`, tunable) → video goes in the gallery as-is (confirmed safe zone:
+    191 MB works, 405 MB fails).
+  * **Over the limit** → the script tries FxTwitter's `formats[]` list (smaller mp4 renditions,
+    highest quality first) and probes each; the first that fits is embedded instead, with a
+    `🔽 Original video is ~X MB — showing a smaller version (~Y MB)… ▶️ Watch full quality on X`
+    note. Example live result: the 905 MB 4K Wuthering video → 1280×720 variant (~135 MB) that
+    **plays in Discord**.
+  * **Over the limit + no fitting variant** → the video's **thumbnail** appears in the gallery plus
+    a `⚠️ Video is ~X MB — ▶️ Watch it on X` note (covers the 56-minute Genshin case).
+  * **Size undetectable** → the video is left untouched (never forced) **unless** it's clearly
+    risky (> 5 minutes *and* ≥ 1080p — matches every verified failure), in which case it's
+    thumbnailed with a watch link. A 2K clip of 1:28 stays in the gallery.
+* **Discord timestamp** — the stats line ends with `🕐 <t:epoch:f>` (taken from FxTwitter's
+  `created_timestamp`, falling back to `created_at`, then the RSS publish date).
+* **Null-safe accent color** — FxTwitter sometimes returns `"color": null`; the card now falls back
+  to Twitter blue instead of crashing.
 
 ## 🌐 How translation works (all versions)
 
@@ -211,8 +267,8 @@ Discord channel.
 | | `reddit_main.py` (V1) | `reddit_main_v2.py` (V2) |
 |---|---|---|
 | Cost | **Free — no API key at all** | Requires an **EmbedEZ API key** (paid credits — see concerns below) |
-| Look | Plain message + `redditez.com` link → Discord auto-embeds it (same idea as fxtwitter) | Rich **Components V2** card (title, author, media gallery, 💬/🔁/❤️/👁️ stats, buttons inside) |
-| Buttons | Read Post (redditez) · Embeddit · vxReddit + your static buttons | Same set, nested inside the card |
+| Look | Plain message + `redditez.com` link → Discord auto-embeds it (same idea as fxtwitter), plus a bare YouTube link with its own playable embed when detected | Rich **Components V2** card (title, author, media gallery, 💬/🔁/❤️/👁️ stats + 🕐 timestamp, buttons inside) |
+| Buttons | Read Post → **original reddit.com thread** · ▶️ YouTube (conditional) · Citlali News · Support | Same set, nested inside the card |
 | Switch to it | `run: python reddit_main.py` | `run: python reddit_main_v2.py` |
 
 ### Secrets
@@ -274,6 +330,27 @@ jobs:
 Create `posted_reddit.json` with `[]` as its initial content (first run posts only the newest thread,
 by design).
 
+## 🆕 Reddit behaviors (2026-09-11 update)
+
+* **Buttons were trimmed.** The Embeddit and vxReddit mirror buttons are **gone** (see concerns §6),
+  and *Read Post* now points to the **original `https://www.reddit.com/...` permalink** — not the
+  redditez mirror. Mirrors stay credited at the top of this README.
+* **YouTube posts get a playable embed (V1).** If the thread body links to YouTube (`watch?`,
+  `shorts/` or `youtu.be`), the bare YouTube URL is appended on its own line after the redditez
+  link — verified to auto-embed a working YouTube player alongside the reddit embed. A conditional
+  **▶️ YouTube button** is also added. On V2 the URL appears as a clickable line plus the same
+  button (Components V2 messages cannot auto-unfurl links — Discord limitation).
+* **Pending-approval / mod-queue posts are never left out.** Subreddits with a moderator queue only
+  publish posts to the `new` RSS listing **when approved** — sometimes hours or a day later. Two
+  safeguards cover this: the freshness window was widened from 3h to **48h** (`MAX_AGE_SECONDS`), and
+  the age check uses the RSS *updated* timestamp whenever it's newer than *published* (an approval
+  bumps `updated`). A thread approved "tomorrow" still arrives. If your subs regularly take longer
+  than 48h to approve, raise `MAX_AGE_SECONDS` near the top of the script.
+* **Reddit V2 fixes** — all EmbedEZ text fields are now HTML-sanitized (their authorized
+  `content.title` itself contains raw `<a>`/`<br>` tags, which previously rendered literally), and
+  the stats line ends with a 🕐 `<t:…:f>` timestamp (from EmbedEZ `postedDate`, falling back to the
+  RSS date).
+
 ## ⚠️ Reddit V2 (Components V2) — concerns you should know
 
 The V2 script was rebuilt against the **currently documented** EmbedEZ API, but please read these
@@ -296,10 +373,19 @@ points before relying on it:
 5. **EmbedEZ warns the API may break.** Their docs explicitly say *"large changes will be made to the
    API in the future, and these might break the current API."* If posts suddenly fail, read the Actions
    log — it prints the exact API response — and check their release notes/docs for field renames.
-6. **A true "click button → switch embed mirror (redditez → Embeddit → vxReddit)" rotation is not
-   possible** with webhooks alone: interactive buttons need a 24/7 bot process answering Discord
-   interactions, which defeats this project's stateless design. That's why all three mirrors are shown
-   as separate always-visible link buttons.
+6. **The Embeddit / vxReddit buttons were removed (2026-09-11).** A true
+   "click to switch embed mirror" rotation is impossible via webhooks — interactive buttons need a
+   24/7 bot process answering Discord interactions, incompatible with this stateless design — and the
+   always-visible duplicate mirror buttons added clutter without value. The mirrors remain fully
+   credited at the top of this README.
+7. **HTML is stripped from every text field.** With a valid API key, EmbedEZ's `content.title` itself
+   contains HTML (`Posted in <a …>r/sub</a><br>…`) — earlier builds rendered those tags literally in
+   the Discord card. All title/description/text fields (authorized *and* public-preview) are
+   sanitized now.
+8. **Components V2 can't auto-unfurl a bare YouTube link** inside a card (the auto-embed player is a
+   V1 behavior Discord only applies to regular message content). V2 therefore shows the YouTube URL
+   as a clickable line plus a ▶️ YouTube button; if you want the playable inline player, use
+   **Reddit V1**.
 
 ## 🔧 Reddit V1 fix (2026-09-11) — why the first run failed
 
@@ -431,7 +517,7 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   `RSS_INSTANCES` with currently-live Nitter mirrors; for Reddit, see the *Reddit V1 fix* section and
   read the new per-source log lines.
 * **`ValueError: invalid literal for int() with base 16: 'None'`** — old V3 bug when FxTwitter returns
-  `"color": null`; fixed via the `hex_color_to_int()` helper with a safe default.
+  `"color": null`; fixed via the `accent_from_color()` helper with a safe Twitter-blue default.
 * **`Deprecation` / `Node.js 20 is deprecated` warnings in Actions logs** — cosmetic, safe to ignore
   (runs are forced onto Node 24).
 * **No run at 10-minute marks** — GitHub's native cron is best-effort; that's why the external
@@ -441,6 +527,10 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   credits; add a valid key (and watch the credit balance), or switch to free V1.
 * **First run posts only one item per account** — intentional anti-flood behavior; normal backfill
   starts on subsequent runs.
+* **A big video shows as a thumbnail / "smaller version" note (X V2/V3)** — intended behavior:
+  the file exceeded the verified ~256 MB Discord gallery limit (e.g. 4K or very long videos). The
+  card still plays a smaller rendition, or links out to X when even that is too big. Tune
+  `VIDEO_SIZE_LIMIT` at the top of the script if Discord's behavior ever changes.
 * **EmbedEZ suddenly errors after an update** — expected risk (their docs warn of breaking changes);
   the Actions log prints the raw API response to help adjust field names.
 
@@ -449,7 +539,34 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 ## 📄 Final notes
 
 * All engines are independent — mix and match freely (e.g. X on V3, Reddit on V1).
+* Legal docs are included: [Privacy Policy](PRIVACY_POLICY.md) · [Terms of Service](TERMS_OF_SERVICE.md)
+  (summary: webhook-only and stateless — the bot collects **no** personal data).
 * Be nice to the free services this project uses: don't shorten the polling interval below 10 minutes,
   cache stays committed so nothing is fetched/posted twice, and consider donating to Nitter's author.
 * All trademarks belong to their respective owners; this project is an unofficial, non-affiliated
   automation tool for personal servers.
+
+---
+
+## 🗒 Changelog
+
+* **2026-09-11 — round 3 (smart videos):** X V2/V3 video handling rebuilt after live Discord tests
+  proved **file size** (not resolution) decides playability. Each video's real size is now probed by
+  HTTP HEAD; oversized (> 256 MB) videos are swapped for a smaller playable FxTwitter `formats[]`
+  rendition (905 MB 4K → 135 MB 720p that plays), or thumbnailed with a watch link when nothing
+  fits. Unknown sizes are left untouched unless clearly risky (> 5 min **and** ≥ 1080p). Replaces
+  the earlier pixel-count rule, which would have wrongly thumbnailed playable 2K clips.
+* **2026-09-11 — round 2:**
+  * **Reddit (V1 + V2):** Embeddit/vxReddit buttons removed; *Read Post* → original `reddit.com`
+    permalink; YouTube link detection (bare playable link on V1, clickable line + ▶️ button on V2);
+    **48-hour mod-queue-safe window** keyed on the RSS *updated* stamp so late-approved posts are
+    never missed; V2 now strips HTML from **all** EmbedEZ text fields and adds a 🕐 `<t:…:f>`
+    Discord timestamp to cards.
+  * **X (V2 + V3):** clickable `#hashtags` / `@mentions` (masked x.com links); 🕐 Discord timestamp
+    on the stats line; null-safe accent color (`accent_from_color`).
+  * **Docs:** added `PRIVACY_POLICY.md` and `TERMS_OF_SERVICE.md`.
+* **2026-09-11 — round 1:** Reddit V1 source-order fix (`www.reddit.com` first + feed validation +
+  per-source logging); Reddit V2 rebuilt on the documented two-step EmbedEZ flow
+  (`search` → `preview`) with graceful public-preview fallback.
+* **Earlier:** X V1/V2/V3 engines, multi-webhook routing, `/en` auto-translation, external
+  cron-job.org scheduling guide.
