@@ -1,10 +1,10 @@
-
----
-
-## 3️⃣ Full Components V2 Edition — `main_v2.py`
-
-## This is a **separate file** — your V1 `main.py` stays untouched. To use it: change the workflow's `run: python main.py` line to `run: python main_v2.py`.
-
+# ---------------------------------------------------------------------------
+# 📋 Full Components V2 Edition — main_v2.py
+# ---------------------------------------------------------------------------
+# This is a separate file — your V1 main.py stays untouched
+# To use it: change the workflow's run: python main.py`
+# line to run: python main_v2.py
+# ---------------------------------------------------------------------------
 ```python
 import os
 import re
