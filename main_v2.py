@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# 📋 Full Components V2 Edition — main_v2.py
+# 📋 Components V2 Edition (Buttons Outside Container) — main_v2.py
 # ---------------------------------------------------------------------------
 # This is a separate file — your V1 main.py stays untouched
 # To use it: change the workflow's run: python main.py
