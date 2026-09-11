@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
-# 📋 Full Components V2 Edition — main_v2.py
+# 📋 Full Components V2 Edition — main_v2_buttonoutside.py
 # ---------------------------------------------------------------------------
 # This is a separate file — your V1 main.py stays untouched
-# To use it: change the workflow's run: python main.py`
+# To use it: change the workflow's run: python main.py
 # line to run: main_v2_buttonoutside.py
 # Note: buttons are outside the component v2
 # ---------------------------------------------------------------------------
