@@ -1,10 +1,10 @@
----------------------------------------------------------------------------
-📋 Components V2 Edition (Buttons Outside Container) — main_v2.py
----------------------------------------------------------------------------
-This is a separate file — your V1 main.py stays untouched
-To use it: change the workflow's run: python main.py
-line to run: main_v2.py
-Note: buttons are outside the component v2
+# ---------------------------------------------------------------------------
+# 📋 Components V2 Edition (Buttons Outside Container) — main_v2.py
+# ---------------------------------------------------------------------------
+# This is a separate file — your V1 main.py stays untouched
+# To use it: change the workflow's run: python main.py
+# line to run: main_v2.py
+# Note: buttons are outside the component v2
 ---------------------------------------------------------------------------
 import os
 import re
