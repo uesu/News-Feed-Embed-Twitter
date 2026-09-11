@@ -35,7 +35,18 @@ RSS_INSTANCES = [
 ]
 
 FXTWITTER_API_BASE = "https://api.fxtwitter.com"
-IS_COMPONENTS_V2 = 1 << 15  # Discord message flag required for Components V2
+IS_COMPONENTS_V2 = 1 << 15
+
+# ---------------------------------------------------------------------------
+# 🌐 LANGUAGE NAMES (for the "Translated from X" header)
+# ---------------------------------------------------------------------------
+LANGUAGE_NAMES = {
+    "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "fr": "French",
+    "de": "German", "es": "Spanish", "pt": "Portuguese", "ru": "Russian",
+    "ar": "Arabic", "it": "Italian", "id": "Indonesian", "th": "Thai",
+    "vi": "Vietnamese", "tl": "Filipino", "hi": "Hindi", "tr": "Turkish",
+    "nl": "Dutch", "pl": "Polish", "uk": "Ukrainian", "sv": "Swedish",
+}
 
 # ---------------------------------------------------------------------------
 # 🔘 BUTTON CONFIGURATION
@@ -100,20 +111,23 @@ async def fetch_working_feed(session: aiohttp.ClientSession, account: str):
     return None
 
 
-async def fetch_tweet_details(session: aiohttp.ClientSession, account: str, tweet_id: str) -> dict | None:
-    """Fetches rich tweet data (text, media, stats) from the FxTwitter API."""
-    url = f"{FXTWITTER_API_BASE}/{account}/status/{tweet_id}"
-    headers = {"User-Agent": "NewsFlashBot/2.0"}  # FxTwitter requires a User-Agent header
+async def fetch_tweet_details(session: aiohttp.ClientSession, account: str, tweet_id: str,
+                                lang_suffix: str = "") -> dict | None:
+    """
+    Fetches tweet data from FxTwitter's API.
+    lang_suffix example: '/en' to request an English translation.
+    """
+    url = f"{FXTWITTER_API_BASE}/{account}/status/{tweet_id}{lang_suffix}"
+    headers = {"User-Agent": "NewsFlashBot/2.0"}
     try:
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
             if response.status != 200:
                 logging.error(f"FxTwitter API returned {response.status} for {tweet_id}")
                 return None
             data = await response.json()
-            # API nests the tweet under "tweet" (current schema)
             return data.get("tweet") or data.get("status")
     except Exception as e:
-        logging.error(f"Error fetching FxTwitter API data for {tweet_id}: {e}")
+        logging.error(f"Error fetching FxTwitter data ({lang_suffix or 'original'}) for {tweet_id}: {e}")
         return None
 
 
@@ -121,7 +135,7 @@ def hex_color_to_int(hex_str: str | None, default: int = 1942002) -> int:
     if not hex_str:
         return default
     try:
-        return int(hex_str.lstrip("#"), 16)
+        return int(str(hex_str).lstrip("#"), 16)
     except Exception:
         return default
 
@@ -141,11 +155,11 @@ def build_action_row(read_post_url: str) -> dict:
     return {"type": 1, "components": buttons[:5]}
 
 
-def build_v2_container(account: str, tweet: dict, read_post_url: str) -> dict:
+def build_v2_container(account: str, tweet: dict, read_post_url: str, display_text: str | None = None) -> dict:
     author = tweet.get("author", {})
     author_name = author.get("name", account)
     screen_name = author.get("screen_name", account)
-    text = tweet.get("text", "")
+    text = display_text if display_text is not None else tweet.get("text", "")
 
     media = tweet.get("media") or {}
     photos = media.get("photos") or []
@@ -186,8 +200,9 @@ def build_v2_container(account: str, tweet: dict, read_post_url: str) -> dict:
 
 
 async def send_v2_webhook(session: aiohttp.ClientSession, webhook_url: str,
-                           account: str, tweet: dict, read_post_url: str) -> bool:
-    container = build_v2_container(account, tweet, read_post_url)
+                           account: str, tweet: dict, read_post_url: str,
+                           display_text: str | None = None) -> bool:
+    container = build_v2_container(account, tweet, read_post_url, display_text=display_text)
     action_row = build_action_row(read_post_url)
 
     payload = {
@@ -284,9 +299,29 @@ async def main():
                     logging.warning(f"Skipping {unique_key}: could not fetch FxTwitter API data.")
                     continue
 
-                success = await send_v2_webhook(session, webhook_url, account, tweet_data, read_post_url)
+                display_text = None
+                lang = (tweet_data.get("lang") or "").lower()
+                if lang and lang != "en":
+                    translated_data = await fetch_tweet_details(session, account, tweet_id, lang_suffix="/en")
+                    if translated_data and translated_data.get("translation"):
+                        translation = translated_data["translation"]
+                        translated_text = translation.get("text", tweet_data.get("text", ""))
+                        original_text = tweet_data.get("text", "")
+                        lang_name = LANGUAGE_NAMES.get(lang, lang.upper())
+
+                        display_text = (
+                            f"📑 Translated from {lang_name}\n\n"
+                            f"{translated_text}\n\n"
+                            f"**Original text**\n{original_text}"
+                        )
+                        tweet_data = translated_data
+                    read_post_url += "/en"
+
+                success = await send_v2_webhook(session, webhook_url, account, tweet_data,
+                                                 read_post_url, display_text=display_text)
                 if success:
                     posted_urls.add(unique_key)
+                    logging.info(f"V2 Posted: {unique_key} (lang={lang or 'en'})")
                     await asyncio.sleep(1.5)
 
     save_posted_urls(posted_urls)
