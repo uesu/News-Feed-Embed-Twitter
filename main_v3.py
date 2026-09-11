@@ -97,7 +97,6 @@ def save_posted_urls(posted_urls: set):
         logging.error(f"Error saving cache file: {e}")
 
 
-# ✅ FIXED: now uses the same realistic browser User-Agent as main.py / main_v2.py
 async def fetch_working_feed(session: aiohttp.ClientSession, account: str):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -134,6 +133,16 @@ async def fetch_tweet_details(session: aiohttp.ClientSession, account: str, twee
     except Exception as e:
         logging.error(f"Error fetching FxTwitter data ({lang_suffix or 'original'}) for {tweet_id}: {e}")
     return None
+
+
+def hex_color_to_int(hex_str, default: int = 1942002) -> int:
+    """Safely parses a hex color string. Handles None, missing, or malformed values."""
+    if not hex_str:
+        return default
+    try:
+        return int(str(hex_str).lstrip("#"), 16)
+    except (ValueError, TypeError):
+        return default
 
 
 def build_nested_action_row(read_post_url: str) -> dict:
@@ -182,7 +191,7 @@ def build_v3_payload(account: str, tweet: dict, read_post_url: str, display_text
 
     container = {
         "type": 17,
-        "accent_color": int(str(tweet.get("color", "#1DA1F2")).lstrip("#"), 16),
+        "accent_color": hex_color_to_int(tweet.get("color")),
         "components": inner_components
     }
 
