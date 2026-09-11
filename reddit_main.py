@@ -1,8 +1,14 @@
 # ---------------------------------------------------------------------------
-# 📋 Reddit Plain Embed V1 Edition — reddit_main.py
+# ■ Reddit RSS Feed Monitor — V1 (plain content + auto-embed via redditez)
 # ---------------------------------------------------------------------------
-# To use it: change the workflow's run: python main.py
-# line to run: reddit_main.py
+# Monitors subreddits via RSS and posts the redditez.com mirror link, letting
+# Discord auto-unfurl it into a rich embed (same idea as fxtwitter for X).
+# Buttons: Read Post (redditez) / Embeddit / vxReddit + your static buttons.
+#
+# No API key required. 100% free.
+#
+# To use the rich Components V2 version instead (requires an EmbedEZ API key),
+# change the workflow run line to: python reddit_main_v2.py
 # ---------------------------------------------------------------------------
 import os
 import re
@@ -18,27 +24,43 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# 📋 SUBREDDITS TO TRACK
+# ■ SUBREDDITS TO TRACK
 # ---------------------------------------------------------------------------
 SUBREDDITS_STR = os.getenv("SUBREDDITS", "Zenlesszonezeroleaks_")
 SUBREDDITS = [s.strip() for s in SUBREDDITS_STR.split(",") if s.strip()]
 
+# Optional fallback webhook used only if a subreddit has no dedicated secret
 DEFAULT_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 CACHE_FILE = "posted_reddit.json"
 MAX_CACHE_SIZE = 500
 MAX_AGE_SECONDS = 6 * 3600  # Reddit posts move slower than tweets; 6h window
 
+# ---------------------------------------------------------------------------
+# ■ RSS SOURCES (tried in order)
+#
+# FIX 2026-09-11:
+#   • www.reddit.com  -> native Reddit RSS; works and returns real Atom feeds.
+#   • old.reddit.com  -> often returns an HTML "Welcome to Reddit" interstitial
+#                        to datacenter IPs (0 entries) — kept as fallback only.
+#   • redlib.*        -> frequently behind a Cloudflare challenge (403) —
+#                        kept as fallback only.
+# The script now validates that the response actually CONTAINS reddit
+# permalinks before accepting it, and logs why each source was skipped.
+# ---------------------------------------------------------------------------
 REDDIT_RSS_INSTANCES = [
-    "https://redlib.perennialte.ch",
+    "https://www.reddit.com",
     "https://old.reddit.com",
+    "https://redlib.perennialte.ch",
 ]
 
 # ---------------------------------------------------------------------------
-# 🔘 BUTTON CONFIGURATION
+# ■ BUTTON CONFIGURATION — customize labels, URLs, and emojis here
+# Discord button "style" 5 = Link button (MUST use "url", no "custom_id")
+# Unicode emoji: {"name": "🔔"} | Custom emoji: {"id": "123", "name": "x", "animated": False}
 # ---------------------------------------------------------------------------
 STATIC_BUTTONS = [
-    {"label": "Citlali News", "url": "https://discord.gg/HyrVP9wRXu", "emoji": {"name": "📰"}},
+    {"label": "Citlali News", "url": "https://discord.gg/HyrVP9wRXu", "emoji": {"name": "✨"}},
     {"label": "Support", "url": "https://ko-fi.com/jieunlatte", "emoji": {"name": "☕"}},
 ]
 
@@ -85,31 +107,51 @@ def extract_post_id(path: str) -> str | None:
 
 
 async def fetch_working_reddit_feed(session: aiohttp.ClientSession, subreddit: str):
+    """
+    Tries each RSS source in order. A source is only accepted if:
+      1. HTTP 200,
+      2. feedparser finds entries,
+      3. the first entries actually contain reddit /comments/ permalinks
+         (rejects HTML interstitial/block pages that return 200 with junk).
+    Every rejection is logged so Actions logs show exactly why a source failed.
+    """
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/rss+xml, application/xml, text/xml, */*"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
     }
     for instance in REDDIT_RSS_INSTANCES:
         feed_url = f"{instance}/r/{subreddit}/new/.rss"
         try:
-            async with session.get(feed_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    content = await response.text()
-                    feed = await asyncio.to_thread(feedparser.parse, content)
-                    if feed.entries:
-                        logging.info(f"Successfully fetched r/{subreddit} from {instance}")
-                        return feed
+            async with session.get(feed_url, headers=headers,
+                                   timeout=aiohttp.ClientTimeout(total=15)) as response:
+                if response.status != 200:
+                    logging.info(f"[{instance}] HTTP {response.status} for r/{subreddit} — trying next source.")
+                    continue
+                content = await response.text()
+                feed = await asyncio.to_thread(feedparser.parse, content)
+                if not feed.entries:
+                    logging.info(f"[{instance}] returned no RSS entries for r/{subreddit} "
+                                 f"(HTML block/interstitial page?) — trying next source.")
+                    continue
+                if not any("/comments/" in str(getattr(e, "link", "")) for e in feed.entries[:5]):
+                    logging.info(f"[{instance}] feed for r/{subreddit} contains no reddit post links — "
+                                 f"trying next source.")
+                    continue
+                logging.info(f"Successfully fetched r/{subreddit} from {instance}")
+                return feed
         except Exception as e:
-            logging.debug(f"Error fetching r/{subreddit} from {instance}: {e}")
+            logging.info(f"[{instance}] error for r/{subreddit}: {e} — trying next source.")
     logging.warning(f"Could not fetch valid RSS feed for r/{subreddit} from any instance.")
     return None
 
 
 def build_components(redditez_url: str, embeddit_url: str, vxreddit_url: str) -> list:
+    """Read Post (redditez) + Embeddit + vxReddit + your static buttons (max 5/row)."""
     buttons = [
-        {"type": 2, "style": 5, "label": "Read Post", "url": redditez_url, "emoji": {"name": "🔗"}},
-        {"type": 2, "style": 5, "label": "Embeddit", "url": embeddit_url, "emoji": {"name": "🎬"}},
-        {"type": 2, "style": 5, "label": "vxReddit", "url": vxreddit_url, "emoji": {"name": "🔁"}},
+        {"type": 2, "style": 5, "label": "Read Post", "url": redditez_url, "emoji": {"name": "📖"}},
+        {"type": 2, "style": 5, "label": "Embeddit", "url": embeddit_url, "emoji": {"name": "🧩"}},
+        {"type": 2, "style": 5, "label": "vxReddit", "url": vxreddit_url, "emoji": {"name": "🛰️"}},
     ]
     for btn in STATIC_BUTTONS:
         b = {"type": 2, "style": 5, "label": btn["label"], "url": btn["url"]}
@@ -120,14 +162,16 @@ def build_components(redditez_url: str, embeddit_url: str, vxreddit_url: str) ->
 
 
 async def send_discord_webhook(session: aiohttp.ClientSession, webhook_url: str, content: str,
-                                 redditez_url: str, embeddit_url: str, vxreddit_url: str) -> bool:
+                               redditez_url: str, embeddit_url: str, vxreddit_url: str) -> bool:
     payload = {
         "content": content,
         "components": build_components(redditez_url, embeddit_url, vxreddit_url),
     }
+    # Discord requires this query param or components are silently dropped
     request_url = f"{webhook_url}?with_components=true"
     try:
-        async with session.post(request_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as response:
+        async with session.post(request_url, json=payload,
+                                timeout=aiohttp.ClientTimeout(total=10)) as response:
             if response.status in (200, 204):
                 logging.info("Successfully posted to Discord Webhook.")
                 return True
@@ -147,7 +191,6 @@ async def main():
     posted = load_posted()
     is_first_run = len(posted) == 0
     now = time.time()
-
     subreddit_posts = {sub: [] for sub in SUBREDDITS}
 
     async with aiohttp.ClientSession() as session:
@@ -157,29 +200,22 @@ async def main():
         for subreddit, feed in zip(SUBREDDITS, feeds):
             if not feed or not feed.entries:
                 continue
-
             entries = [feed.entries[0]] if is_first_run else feed.entries
-
             for entry in entries:
                 raw_link = getattr(entry, "link", "")
                 path = normalize_reddit_path(raw_link)
                 if not path:
                     continue
-
                 post_id = extract_post_id(path)
                 if not post_id:
                     continue
-
                 unique_key = f"{subreddit}_{post_id}"
                 if unique_key in posted:
                     continue
-
                 published_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
                 published_ts = time.mktime(published_parsed) if published_parsed else now
-
                 if not is_first_run and (now - published_ts > MAX_AGE_SECONDS):
                     continue
-
                 subreddit_posts[subreddit].append({
                     "path": path,
                     "unique_key": unique_key,
@@ -198,22 +234,17 @@ async def main():
         for subreddit, posts in subreddit_posts.items():
             if not posts:
                 continue
-
             webhook_url = get_webhook_for_subreddit(subreddit)
             if not webhook_url:
                 logging.error(f"No webhook configured for r/{subreddit}. Skipping.")
                 continue
-
             posts.sort(key=lambda p: p["published_ts"])
-
             for post in posts:
                 path = post["path"]
                 redditez_url = f"https://www.redditez.com{path}"
                 embeddit_url = f"https://embeddit.deltandy.me{path}"
                 vxreddit_url = f"https://vxreddit.com{path}"
-
-                message = f"📰 **New post in r/{subreddit}**\n{redditez_url}"
-
+                message = f"🔔 **New post in r/{subreddit}**\n{redditez_url}"
                 success = await send_discord_webhook(
                     session, webhook_url, message, redditez_url, embeddit_url, vxreddit_url
                 )
