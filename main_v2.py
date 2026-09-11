@@ -5,7 +5,7 @@
 # To use it: change the workflow's run: python main.py
 # line to run: main_v2.py
 # Note: buttons are outside the component v2
----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 import os
 import re
 import json
