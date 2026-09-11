@@ -1,9 +1,9 @@
 # ---------------------------------------------------------------------------
-# 📋 Full Components V2 Edition — main_v2_buttoninside.py
+# 📋 Full Components V2 Edition — main_v3.py
 # ---------------------------------------------------------------------------
 # This is a separate file — your V1 main.py stays untouched
 # To use it: change the workflow's run: python main.py
-# line to run: main_v2_buttoninside.py
+# line to run: main_v3.py
 # Note: buttons are inside the component v2
 # ---------------------------------------------------------------------------
 import os
