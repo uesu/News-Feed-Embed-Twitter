@@ -2,10 +2,8 @@ name: RSS Feed Monitor
 
 on:
   schedule:
-    # Runs every 5 minutes (fastest GitHub schedule)
     - cron: '*/5 * * * *'
-  workflow_dispatch: # Allows manual trigger anytime from GitHub Actions tab
-
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -30,8 +28,12 @@ jobs:
 
       - name: Run RSS Feed Monitor
         env:
+          ACCOUNTS: ${{ secrets.ACCOUNTS || 'TYPEII_EN,PomPom_HonkaiSR,Wuthering_Waves,HonkaiNA' }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          ACCOUNTS: ${{ secrets.ACCOUNTS || 'sunnewstamil,News18TamilNadu,polimernews,NewsTamilTV24x7' }}
+          WEBHOOK_TYPEII_EN: ${{ secrets.WEBHOOK_TYPEII_EN }}
+          WEBHOOK_POMPOM_HONKAISR: ${{ secrets.WEBHOOK_POMPOM_HONKAISR }}
+          WEBHOOK_WUTHERING_WAVES: ${{ secrets.WEBHOOK_WUTHERING_WAVES }}
+          WEBHOOK_HONKAINA: ${{ secrets.WEBHOOK_HONKAINA }}
         run: python main.py
 
       - name: Commit and push updated posted_tweets.json cache
