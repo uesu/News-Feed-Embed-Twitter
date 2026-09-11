@@ -3,9 +3,15 @@
 # ---------------------------------------------------------------------------
 # Monitors subreddits via RSS and posts the redditez.com mirror link, letting
 # Discord auto-unfurl it into a rich embed (same idea as fxtwitter for X).
-# Buttons: Read Post (redditez) / Embeddit / vxReddit + your static buttons.
 #
 # No API key required. 100% free.
+#
+# Features:
+#   • Read Post button -> the ORIGINAL reddit.com permalink
+#   • YouTube detection -> bare YouTube URL on its own line (auto-embeds a
+#     playable video in Discord) + an optional "YouTube" link button
+#   • Mod-queue safe -> approved posts resurface via the RSS "updated" stamp,
+#     with a 48-hour catch window (see MAX_AGE_SECONDS below)
 #
 # To use the rich Components V2 version instead (requires an EmbedEZ API key),
 # change the workflow run line to: python reddit_main_v2.py
@@ -34,19 +40,25 @@ DEFAULT_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 CACHE_FILE = "posted_reddit.json"
 MAX_CACHE_SIZE = 500
-MAX_AGE_SECONDS = 6 * 3600  # Reddit posts move slower than tweets; 6h window
+
+# How old a post's latest activity may be before we skip it.
+# Kept WIDE (48h) on purpose: subreddits with moderator approval queues can
+# surface a post a day or more after submission. When a queued post gets
+# approved, Reddit bumps its RSS "updated" timestamp — we use that (see
+# activity_ts below), so newly-approved posts are still caught and never
+# left out. If you track very slow subreddits, you can widen this further.
+MAX_AGE_SECONDS = 48 * 3600
 
 # ---------------------------------------------------------------------------
 # ■ RSS SOURCES (tried in order)
 #
-# FIX 2026-09-11:
 #   • www.reddit.com  -> native Reddit RSS; works and returns real Atom feeds.
 #   • old.reddit.com  -> often returns an HTML "Welcome to Reddit" interstitial
-#                        to datacenter IPs (0 entries) — kept as fallback only.
+#                        to datacenter IPs (0 entries) — fallback only.
 #   • redlib.*        -> frequently behind a Cloudflare challenge (403) —
-#                        kept as fallback only.
-# The script now validates that the response actually CONTAINS reddit
-# permalinks before accepting it, and logs why each source was skipped.
+#                        fallback only.
+# The script validates that the response actually CONTAINS reddit permalinks
+# before accepting it, and logs why each source was skipped.
 # ---------------------------------------------------------------------------
 REDDIT_RSS_INSTANCES = [
     "https://www.reddit.com",
@@ -58,11 +70,21 @@ REDDIT_RSS_INSTANCES = [
 # ■ BUTTON CONFIGURATION — customize labels, URLs, and emojis here
 # Discord button "style" 5 = Link button (MUST use "url", no "custom_id")
 # Unicode emoji: {"name": "🔔"} | Custom emoji: {"id": "123", "name": "x", "animated": False}
+# Note: click-to-rotate embed mirrors are NOT possible with plain webhooks
+# (that needs a 24/7 bot answering Discord interactions), so the buttons are
+# fixed link buttons only — Reddit-side mirrors were removed by request.
 # ---------------------------------------------------------------------------
 STATIC_BUTTONS = [
     {"label": "Citlali News", "url": "https://discord.gg/HyrVP9wRXu", "emoji": {"name": "✨"}},
     {"label": "Support", "url": "https://ko-fi.com/jieunlatte", "emoji": {"name": "☕"}},
 ]
+
+# Matches watch / shorts / youtu.be links inside the RSS entry HTML
+YOUTUBE_RE = re.compile(
+    r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?[^\s\"'<>)\]]+|shorts/[^\s\"'<>)\]]+)"
+    r"|youtu\.be/[^\s\"'<>)\]]+)",
+    re.IGNORECASE,
+)
 
 
 def get_webhook_for_subreddit(subreddit: str) -> str | None:
@@ -106,6 +128,20 @@ def extract_post_id(path: str) -> str | None:
     return match.group(1) if match else None
 
 
+def extract_youtube_url(entry) -> str | None:
+    """Finds a YouTube link (watch / shorts / youtu.be) in the RSS entry HTML."""
+    html_parts = []
+    if entry.get("content"):
+        html_parts.extend(c.get("value", "") for c in entry.content)
+    if entry.get("summary"):
+        html_parts.append(entry.summary)
+    for html in html_parts:
+        match = YOUTUBE_RE.search(html or "")
+        if match:
+            return match.group(0)
+    return None
+
+
 async def fetch_working_reddit_feed(session: aiohttp.ClientSession, subreddit: str):
     """
     Tries each RSS source in order. A source is only accepted if:
@@ -146,13 +182,14 @@ async def fetch_working_reddit_feed(session: aiohttp.ClientSession, subreddit: s
     return None
 
 
-def build_components(redditez_url: str, embeddit_url: str, vxreddit_url: str) -> list:
-    """Read Post (redditez) + Embeddit + vxReddit + your static buttons (max 5/row)."""
+def build_components(reddit_url: str, youtube_url: str | None = None) -> list:
+    """Read Post (original reddit URL) [+ YouTube if detected] + static buttons (max 5/row)."""
     buttons = [
-        {"type": 2, "style": 5, "label": "Read Post", "url": redditez_url, "emoji": {"name": "📖"}},
-        {"type": 2, "style": 5, "label": "Embeddit", "url": embeddit_url, "emoji": {"name": "🧩"}},
-        {"type": 2, "style": 5, "label": "vxReddit", "url": vxreddit_url, "emoji": {"name": "🛰️"}},
+        {"type": 2, "style": 5, "label": "Read Post", "url": reddit_url, "emoji": {"name": "📖"}},
     ]
+    if youtube_url:
+        buttons.append({"type": 2, "style": 5, "label": "YouTube", "url": youtube_url,
+                        "emoji": {"name": "▶️"}})
     for btn in STATIC_BUTTONS:
         b = {"type": 2, "style": 5, "label": btn["label"], "url": btn["url"]}
         if btn.get("emoji"):
@@ -162,10 +199,10 @@ def build_components(redditez_url: str, embeddit_url: str, vxreddit_url: str) ->
 
 
 async def send_discord_webhook(session: aiohttp.ClientSession, webhook_url: str, content: str,
-                               redditez_url: str, embeddit_url: str, vxreddit_url: str) -> bool:
+                               reddit_url: str, youtube_url: str | None = None) -> bool:
     payload = {
         "content": content,
-        "components": build_components(redditez_url, embeddit_url, vxreddit_url),
+        "components": build_components(reddit_url, youtube_url),
     }
     # Discord requires this query param or components are silently dropped
     request_url = f"{webhook_url}?with_components=true"
@@ -212,14 +249,25 @@ async def main():
                 unique_key = f"{subreddit}_{post_id}"
                 if unique_key in posted:
                     continue
-                published_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+
+                # --- mod-queue safe age check ---------------------------------
+                # Pending posts can be APPROVED hours/days later; Reddit bumps
+                # the entry's "updated" stamp on approval, so we age-check the
+                # most RECENT of (published, updated) instead of publish time.
+                published_parsed = entry.get("published_parsed")
+                updated_parsed = entry.get("updated_parsed")
                 published_ts = time.mktime(published_parsed) if published_parsed else now
-                if not is_first_run and (now - published_ts > MAX_AGE_SECONDS):
+                updated_ts = time.mktime(updated_parsed) if updated_parsed else published_ts
+                activity_ts = max(published_ts, updated_ts)
+                if not is_first_run and (now - activity_ts > MAX_AGE_SECONDS):
                     continue
+                # --------------------------------------------------------------
+
                 subreddit_posts[subreddit].append({
                     "path": path,
                     "unique_key": unique_key,
                     "published_ts": published_ts,
+                    "youtube_url": extract_youtube_url(entry),
                     "title": getattr(entry, "title", "New post"),
                 })
 
@@ -241,12 +289,19 @@ async def main():
             posts.sort(key=lambda p: p["published_ts"])
             for post in posts:
                 path = post["path"]
-                redditez_url = f"https://www.redditez.com{path}"
-                embeddit_url = f"https://embeddit.deltandy.me{path}"
-                vxreddit_url = f"https://vxreddit.com{path}"
-                message = f"🔔 **New post in r/{subreddit}**\n{redditez_url}"
+                reddit_url = f"https://www.reddit.com{path}"        # original permalink
+                redditez_url = f"https://www.redditez.com{path}"    # rich auto-embed mirror
+                youtube_url = post["youtube_url"]
+
+                # Header + masked redditez link (auto-embeds) + bare YouTube URL
+                # on its own line so Discord also unfurls a playable YT player.
+                lines = [f"🔔 **New post in r/{subreddit}**", redditez_url]
+                if youtube_url:
+                    lines.append(youtube_url)
+                message = "\n".join(lines)
+
                 success = await send_discord_webhook(
-                    session, webhook_url, message, redditez_url, embeddit_url, vxreddit_url
+                    session, webhook_url, message, reddit_url, youtube_url
                 )
                 if success:
                     posted.add(post["unique_key"])
