@@ -35,7 +35,7 @@ jobs:
           WEBHOOK_WUTHERING_WAVES: ${{ secrets.WEBHOOK_WUTHERING_WAVES }}
           WEBHOOK_HONKAINA: ${{ secrets.WEBHOOK_HONKAINA }}
           WEBHOOK_ANANTA_EN: ${{ secrets.WEBHOOK_ANANTA_EN }}
-        run: python main_v3.py   # ← switch to main.py / main_v2.py here
+        run: python "testing area/main_v3test.py"   # ← switch to main.py / main_v2.py here
 
       - name: Commit and push updated posted_tweets.json cache
         run: |
