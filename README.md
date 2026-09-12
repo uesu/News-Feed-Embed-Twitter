@@ -22,7 +22,7 @@ please support them:
 | **EmbedEZ** | Rich Reddit embeds (redditez.com mirror) + the provider API used by Reddit V2 | [embedez.com](https://embedez.com/) · [redditez.com](https://www.redditez.com) · [API docs](https://embedez.com/docs) |
 | **Embeddit** by [@DeltAndy123](https://github.com/DeltAndy123) | Alternative Reddit embed mirror (credited — its button was removed in the 2026-09-11 trim) | [GitHub](https://github.com/DeltAndy123/Embeddit) · [embeddit.deltandy.me](https://embeddit.deltandy.me) |
 | **vxReddit** by [@dylanpdx](https://github.com/dylanpdx) | Alternative Reddit embed mirror (credited — its button was removed in the 2026-09-11 trim) | [GitHub](https://github.com/dylanpdx/vxReddit) · [vxreddit.com](https://vxreddit.com) |
-| **Redlib** | Reddit front-end mirror used as an RSS fallback source | [redlib.perennialte.ch](https://redlib.perennialte.ch) |
+| **Redlib** (community instances) | Reddit front-end mirrors used as RSS fallback sources — official instance list, refreshed 2026-09-12 | [redlib-instances](https://github.com/redlib-org/redlib-instances) · [redlib](https://github.com/redlib-org/redlib) |
 | **cron-job.org** | Free external scheduler that triggers the workflows reliably every 10 minutes | [cron-job.org](https://cron-job.org) |
 | **GitHub Actions** | Runs everything on a schedule, for free | — |
 | **Discord Webhooks** | Delivers messages to channels statelessly | — |
@@ -416,7 +416,8 @@ by design).
   bumps `updated`). A thread approved "tomorrow" still arrives. If your subs regularly take longer
   than 48h to approve, raise `MAX_AGE_SECONDS` near the top of the script.
 * **Reddit V2 fixes** — all EmbedEZ text fields are now HTML-sanitized (their authorized
-  `content.title` itself contains raw `<a>`/`<br>` tags, which previously rendered literally), and
+  `content.title` itself contains raw `<a>`/`
+` tags, which previously rendered literally), and
   the stats line ends with a 🕐 `<t:…:f>` timestamp (from EmbedEZ `postedDate`, falling back to the
   RSS date).
 
@@ -448,7 +449,8 @@ points before relying on it:
    always-visible duplicate mirror buttons added clutter without value. The mirrors remain fully
    credited at the top of this README.
 7. **HTML is stripped from every text field.** With a valid API key, EmbedEZ's `content.title` itself
-   contains HTML (`Posted in <a …>r/sub</a><br>…`) — earlier builds rendered those tags literally in
+   contains HTML (`Posted in <a …>r/sub</a>
+…`) — earlier builds rendered those tags literally in
    the Discord card. All title/description/text fields (authorized *and* public-preview) are
    sanitized now.
 8. **Components V2 can't auto-unfurl a bare YouTube link** inside a card (the auto-embed player is a
@@ -475,6 +477,30 @@ verified live:
 
 If `www.reddit.com` ever starts blocking GitHub's datacenter IPs for you, open the Actions log —
 you'll see the per-source reasons — and just reorder/replace entries in `REDDIT_RSS_INSTANCES`.
+
+### 🆕 2026-09-12 — dead Redlib instance + HTTP 429 fixes (all subreddits at once)
+
+With all six subreddits monitored simultaneously, two live issues surfaced:
+
+| Problem | What the Actions log showed |
+|---|---|
+| `redlib.perennialte.ch` **shut down** (31 Aug 2026 — "long-term unreliability") | `[https://redlib.perennialte.ch] HTTP 410 for r/… — trying next source.` |
+| `www.reddit.com` **rate-limits parallel fetches** (six subs hit in the same second) | `[https://www.reddit.com] HTTP 429 for r/… — trying next source.` for most subs; only one or two got through |
+
+Both Reddit scripts now:
+* **retry once on HTTP 429** after `RATE_LIMIT_RETRY_DELAY` (6s) before falling through to the
+  next source;
+* **stagger the fetch starts** by `FEED_FETCH_STAGGER` (1.2s between subreddits) so the six feeds
+  no longer fire simultaneously;
+* use a **fresh Redlib fallback chain** from the official instance list (checked 2026-09-12):
+  `safereddit.com` → `red.artemislena.eu` → `redlib.privacyredirect.com` → `redlib.privadency.com`
+  → `redlib.nadeko.net` → `redlib.ducks.party` → `redlib.catsarch.com` → `snoo.habedieeh.re`
+  (note: `safereddit.com` filters NSFW — harmless as a fallback for these subs).
+
+A missed run loses nothing: the 48-hour window still catches any post on a later run. If Reddit
+ever blocks GitHub's datacenter IPs more aggressively, or a Redlib instance dies, the Actions log
+shows exactly which source answered what — just reorder/replace entries in `REDDIT_RSS_INSTANCES`
+(identical list in both Reddit scripts).
 
 ---
 
@@ -592,6 +618,10 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 * **`Could not fetch valid RSS feed for @…` / `r/…`** — public mirrors rotate/die. For X, swap
   `RSS_INSTANCES` with currently-live Nitter mirrors; for Reddit, see the *Reddit V1 fix* section and
   read the new per-source log lines.
+* **`HTTP 429 for r/…` lines in a Reddit run** — Reddit rate-limiting datacenter bursts; the script
+  retries once and staggers the fetches, so a 429 in the log is usually self-resolving. If a
+  subreddit still ends up "from any instance", the post is **not** lost — the 48h window catches it
+  on a later run.
 * **`ValueError: invalid literal for int() with base 16: 'None'`** — old V3 bug when FxTwitter returns
   `"color": null`; fixed via the `accent_from_color()` helper with a safe Twitter-blue default.
 * **`Deprecation` / `Node.js 20 is deprecated` warnings in Actions logs** — cosmetic, safe to ignore
@@ -640,6 +670,14 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 ## 🗒 Changelog
 
+* **2026-09-12 — round 8:**
+  * **Reddit RSS sources fixed for multi-sub monitoring.** `redlib.perennialte.ch` removed (shut
+    down 2026-08-31, now answers HTTP 410); fresh Redlib fallback chain from the official
+    [redlib-instances](https://github.com/redlib-org/redlib-instances) list (safereddit.com,
+    red.artemislena.eu, redlib.privacyredirect.com, redlib.privadency.com, redlib.nadeko.net,
+    redlib.ducks.party, redlib.catsarch.com, snoo.habedieeh.re). **429 retry with 6s backoff** +
+    **staggered fetch starts (1.2s)** so six subreddits no longer hit www.reddit.com in the same
+    second — fixes the "only one subreddit posts per run" symptom.
 * **2026-09-12 — round 7:**
   * **Five new default subreddits** added to both Reddit engines:
     `Genshin_Impact_Leaks`, `HonkaiStarRail_leaks`, `WutheringWavesLeaks`, `HonkaiNexusAnimaLeaks`,
@@ -701,5 +739,6 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   (`search` → `preview`) with graceful public-preview fallback.
 * **Earlier:** X V1/V2/V3 engines, multi-webhook routing, `/en` auto-translation, external
   cron-job.org scheduling guide.
-nslation, external
-  cron-job.org scheduling guide.
+
+
+---
