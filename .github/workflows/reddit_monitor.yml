@@ -2,8 +2,8 @@ name: Reddit Feed Monitor
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
-  workflow_dispatch:
+    - cron: '*/10 * * * *'   # backup only — GitHub cron is best-effort
+  workflow_dispatch:          # allows manual + external-cron triggering
 
 permissions:
   contents: write
@@ -32,8 +32,13 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           EMBEDEZ_API_KEY: ${{ secrets.EMBEDEZ_API_KEY }}
           WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_: ${{ secrets.WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_ }}
-        run: python reddit_main.py
-        # 👆 Change to reddit_main_v2.py to use the rich Components V2 version instead
+          WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS: ${{ secrets.WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS }}
+          WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS: ${{ secrets.WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS }}
+          WEBHOOK_REDDIT_WUTHERINGWAVESLEAKS: ${{ secrets.WEBHOOK_REDDIT_WUTHERINGWAVESLEAKS }}
+          WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS: ${{ secrets.WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS }}
+          WEBHOOK_REDDIT_ANANTALEAKS: ${{ secrets.WEBHOOK_REDDIT_ANANTALEAKS }}
+          REDDIT_MIRROR: ${{ vars.REDDIT_MIRROR }}   # optional (V1): blank/omitted = redditez.com
+        run: python reddit_main.py   # ← switch to reddit_main_v2.py for the rich card
 
       - name: Commit and push updated posted_reddit.json cache
         run: |

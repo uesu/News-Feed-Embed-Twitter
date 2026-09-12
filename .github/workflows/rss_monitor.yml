@@ -2,8 +2,8 @@ name: RSS Feed Monitor
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '*/10 * * * *'   # backup only — GitHub cron is best-effort
+  workflow_dispatch:          # allows manual + external-cron triggering
 
 permissions:
   contents: write
@@ -28,13 +28,14 @@ jobs:
 
       - name: Run RSS Feed Monitor
         env:
-          ACCOUNTS: ${{ secrets.ACCOUNTS || 'TYPEII_EN,PomPom_HonkaiSR,Wuthering_Waves,HonkaiNA' }}
+          ACCOUNTS: ${{ secrets.ACCOUNTS }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           WEBHOOK_TYPEII_EN: ${{ secrets.WEBHOOK_TYPEII_EN }}
           WEBHOOK_POMPOM_HONKAISR: ${{ secrets.WEBHOOK_POMPOM_HONKAISR }}
           WEBHOOK_WUTHERING_WAVES: ${{ secrets.WEBHOOK_WUTHERING_WAVES }}
           WEBHOOK_HONKAINA: ${{ secrets.WEBHOOK_HONKAINA }}
-        run: python main_v3.py
+          WEBHOOK_ANANTA_EN: ${{ secrets.WEBHOOK_ANANTA_EN }}
+        run: python main_v3.py   # ← switch to main.py / main_v2.py here
 
       - name: Commit and push updated posted_tweets.json cache
         run: |
