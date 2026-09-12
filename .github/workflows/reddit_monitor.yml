@@ -38,7 +38,7 @@ jobs:
           WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS: ${{ secrets.WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS }}
           WEBHOOK_REDDIT_ANANTALEAKS: ${{ secrets.WEBHOOK_REDDIT_ANANTALEAKS }}
           REDDIT_MIRROR: ${{ vars.REDDIT_MIRROR }}   # optional (V1): blank/omitted = redditez.com
-        run: python reddit_main.py   # ← switch to reddit_main_v2.py for the rich card
+        run: python reddit_maintest.py   # ← switch to reddit_main_v2.py for the rich card
 
       - name: Commit and push updated posted_reddit.json cache
         run: |
