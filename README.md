@@ -177,11 +177,17 @@ Fixes and formats added after real feed runs:
   link's `og:image` (works for hoyoverse/kurogames pages). Profile pictures are never used, and the
   extra fetch is skipped for normal tweets.
 * **GIF support.** X "GIFs" are internally tiny looping mp4s (`tweet_video/*.mp4`). When detected,
-  the script swaps in FxTwitter's animated **WebP** rendition
-  (`gif.fxtwitter.com/tweet_video/*.webp`), which renders/plays as an image in Discord. That CDN is
-  **intermittently down** (Cloudflare 530/1033 — a maintainer-side issue, confirmed live); when it
-  doesn't answer, the mp4 is kept, which still plays as a video. Never forced — it self-heals once
-  the CDN recovers.
+  the script swaps in a real **animated image** so it plays inline instead of sitting in a video
+  player. Two community converters are probed in order — **never forced**:
+  1. FxTwitter's official animated WebP (`gif.fxtwitter.com/tweet_video/*.webp`) — the same asset
+     V1 embeds use. Its CDN is **intermittently down** (Cloudflare 530/1033, confirmed live).
+  2. **fastgif** (`fastgif-production.up.railway.app/tweet_video/*.gif`) — an independent
+     third-party converter that outputs true GIFs (round 6). Only its `.gif` route works (its
+     `.webp` route errors), and unknown ids return 500, which makes it safely probeable.
+
+  Each source is HEAD-probed before use; if the first is down the second takes over automatically,
+  and if neither answers, the mp4 is kept, which still plays as a video. The chain is self-healing
+  in both directions — the moment `gif.fxtwitter.com` recovers it becomes the primary again.
 * **Portrait videos that "load but won't play" — root-caused in round 5.** Vertical videos
   (`h > w`, e.g. the 58s Jingran showcase) intermittently failed to play right after posting —
   but follow-up tests showed the **same direct URLs playing fine** in Components V2 shortly after
@@ -579,9 +585,11 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   over-length text) emitted an invalid empty text component. Fixed in round 4 — text is chunked and
   empty components are never sent. If it ever recurs, the Actions log prints the full Discord
   response next to the tweet ID.
-* **A GIF shows as a video player instead of an animated image** — `gif.fxtwitter.com` (the WebP
-  rendition) is intermittently down (530/1033). The script keeps the mp4 player automatically and
-  logs `gif.fxtwitter.com unavailable ... keeping mp4 player`. It self-heals; nothing to do.
+* **A GIF shows as a video player instead of an animated image** — both GIF converters were
+  unreachable at post time (the log shows `No GIF converter answered ... keeping mp4 player`), so
+  the mp4 was kept as the safe fallback. This is rare: when `gif.fxtwitter.com` is down (530/1033),
+  the script automatically falls back to **fastgif** (`fastgif-production.up.railway.app`), logged
+  as `gif.fxtwitter.com down; using fastgif for ...`. Both recover on their own; nothing to do.
 * **A portrait/vertical video loads but won't play right after posting** — this was a transient
   Discord proxy warm-up behavior (the same URLs play fine shortly after, confirmed across services).
   Direct URLs are the default again since round 5. If you ever confirm a *persistent* portrait
@@ -606,6 +614,16 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 ## 🗒 Changelog
 
+* **2026-09-12 — round 6:**
+  * **GIF resilience — fastgif fallback added.** With `gif.fxtwitter.com`'s CDN still down
+    (530/1033), GIF posts were falling back to mp4 players. GIFs now resolve through a two-source
+    probe chain: the official `gif.fxtwitter.com` WebP first, then
+    **fastgif** (`fastgif-production.up.railway.app/tweet_video/<id>.gif`) — an independent
+    third-party converter serving REAL animated GIFs that show *and* play in Components V2
+    (confirmed live against the exact tweet ids that were broken). Only its `.gif` route is used —
+    its `.webp` route errors, and unknown ids return 500, so the probe is safe and never forced.
+    If neither converter answers, the original mp4 is kept (still plays as a video). The chain
+    self-heals in both directions. Verified live on single-GIF and 4-GIF tweets.
 * **2026-09-11 — round 5:**
   * **Portrait-video handling revised** after further evidence: the "loads but won't play" symptom
     is a transient Discord proxy warm-up (the same direct URLs soon play fine in Components V2), so

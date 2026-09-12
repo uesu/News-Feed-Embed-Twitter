@@ -54,6 +54,7 @@ public URL being looked up):
 | **FxTwitter / FxEmbed API** | Tweet metadata, media, translation | https://fxtwitter.com |
 | **video.twimg.com / x.com (X CDN & post pages)** | HTTP HEAD probes of public video file sizes (X V2/V3 "smart video" check) and OpenGraph image lookups on public post pages — only meta tags are read, no content is downloaded | https://x.com |
 | **gif.fxtwitter.com** | One HEAD probe per X GIF to check the animated WebP rendition exists before using it | https://fxtwitter.com |
+| **fastgif-production.up.railway.app** | Only when the above probe fails: one HEAD probe per X GIF to check the converted animated GIF exists; if it answers, Discord fetches that converted GIF when rendering the post. Independent third-party service, unaffiliated with this project or FxTwitter | https://railway.app |
 | **EmbedEZ API** (Reddit V2 only) | Reddit post metadata, media | https://embedez.com |
 | **reddit.com** | Public subreddit RSS | https://www.reddit.com/policies/privacy-policy |
 | **cron-job.org** (optional) | External schedule trigger | https://cron-job.org/en/privacy/ |
