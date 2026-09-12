@@ -24,6 +24,11 @@
 #      but if the API changes shape again, check the Actions logs.
 #   4. The old unofficial "/providers/combined?q=" endpoint from early docs is
 #      no longer documented — this script uses only the documented endpoints.
+#
+# ■ ROUND 8 (2026-09-12): same RSS source fixes as V1 — dead
+#   redlib.perennialte.ch removed (shut down 2026-08-31, answers HTTP 410);
+#   fresh Redlib fallback list (official redlib-instances, checked 2026-09-12);
+#   429 retry with backoff + staggered fetch starts.
 # ---------------------------------------------------------------------------
 import os
 import re
@@ -51,11 +56,41 @@ MAX_CACHE_SIZE = 500
 # or more later are still caught (approval bumps the RSS "updated" stamp).
 MAX_AGE_SECONDS = 48 * 3600
 
+# ---------------------------------------------------------------------------
+# ■ RSS SOURCES (tried in order)
+#
+#   • www.reddit.com  -> native Reddit RSS; usually works, but aggressively
+#     rate-limits datacenter IPs (HTTP 429) when several feeds are fetched
+#     back-to-back — the script retries once after RATE_LIMIT_RETRY_DELAY.
+#   • old.reddit.com  -> often returns an HTML "Welcome to Reddit" interstitial
+#                        to datacenter IPs (0 entries) — fallback only.
+#   • Redlib mirrors  -> community Redlib instances, list refreshed
+#                        2026-09-12 from github.com/redlib-org/redlib-instances.
+#                        (redlib.perennialte.ch was SHUT DOWN 2026-08-31 and
+#                        now answers HTTP 410 — removed.)
+#                        Note: safereddit.com is SFW-only — fine as fallback.
+# The script validates that the response actually CONTAINS reddit permalinks
+# before accepting it, and logs why each source was skipped.
+# ---------------------------------------------------------------------------
 REDDIT_RSS_INSTANCES = [
     "https://www.reddit.com",
     "https://old.reddit.com",
-    "https://redlib.perennialte.ch",
+    "https://safereddit.com",
+    "https://red.artemislena.eu",
+    "https://redlib.privacyredirect.com",
+    "https://redlib.privadency.com",
+    "https://redlib.nadeko.net",
+    "https://redlib.ducks.party",
+    "https://redlib.catsarch.com",
+    "https://snoo.habedieeh.re",
 ]
+
+# Wait this long before retrying the SAME source once after an HTTP 429.
+RATE_LIMIT_RETRY_DELAY = 6
+# Start each subreddit's feed fetch this many seconds after the previous one,
+# so six subs don't all hit www.reddit.com in the same second (the burst
+# that triggers 429s).
+FEED_FETCH_STAGGER = 1.2
 
 EMBEDEZ_SEARCH_URL = "https://embedez.com/api/v1/providers/search"
 EMBEDEZ_PREVIEW_URL = "https://embedez.com/api/v1/providers/preview"
@@ -133,7 +168,8 @@ def extract_youtube_url(entry) -> str | None:
 
 def strip_html(value: str | None) -> str:
     """
-    Removes tags (<a>, <br>...) from EmbedEZ's HTML-ish strings.
+    Removes tags (<a>,
+...) from EmbedEZ's HTML-ish strings.
     Applied to EVERY text field (content.title/description/text AND
     preview.title/description) because authorized responses contain HTML too.
     """
@@ -154,32 +190,56 @@ def resolve_post_timestamp(content: dict, fallback_ts: float) -> int:
 
 
 async def fetch_working_reddit_feed(session: aiohttp.ClientSession, subreddit: str):
+    """
+    Tries each RSS source in order. A source is only accepted if:
+      1. HTTP 200,
+      2. feedparser finds entries,
+      3. the first entries actually contain reddit /comments/ permalinks
+         (rejects HTML interstitial/block pages that return 200 with junk).
+    HTTP 429 (rate limited — common on www.reddit.com when several feeds are
+    fetched back-to-back from the same IP) is retried ONCE after
+    RATE_LIMIT_RETRY_DELAY seconds before moving to the next source.
+    Every rejection is logged so Actions logs show exactly why a source failed.
+    """
     headers = {
         **BROWSER_HEADERS,
         "Accept": "application/rss+xml, application/xml, text/xml, */*",
     }
     for instance in REDDIT_RSS_INSTANCES:
         feed_url = f"{instance}/r/{subreddit}/new/.rss"
-        try:
-            async with session.get(feed_url, headers=headers,
-                                   timeout=aiohttp.ClientTimeout(total=15)) as response:
-                if response.status != 200:
-                    logging.info(f"[{instance}] HTTP {response.status} for r/{subreddit} — trying next source.")
-                    continue
-                content = await response.text()
-                feed = await asyncio.to_thread(feedparser.parse, content)
-                if not feed.entries:
-                    logging.info(f"[{instance}] returned no RSS entries for r/{subreddit} "
-                                 f"(HTML block/interstitial page?) — trying next source.")
-                    continue
-                if not any("/comments/" in str(getattr(e, "link", "")) for e in feed.entries[:5]):
-                    logging.info(f"[{instance}] feed for r/{subreddit} contains no reddit post links — "
-                                 f"trying next source.")
-                    continue
-                logging.info(f"Successfully fetched r/{subreddit} from {instance}")
-                return feed
-        except Exception as e:
-            logging.info(f"[{instance}] error for r/{subreddit}: {e} — trying next source.")
+        attempt = 0
+        while attempt < 2:
+            attempt += 1
+            try:
+                async with session.get(feed_url, headers=headers,
+                                       timeout=aiohttp.ClientTimeout(total=15)) as response:
+                    if response.status == 429:
+                        if attempt == 1:
+                            logging.info(f"[{instance}] HTTP 429 (rate limited) for r/{subreddit} — "
+                                         f"retrying in {RATE_LIMIT_RETRY_DELAY}s.")
+                            await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
+                            continue
+                        logging.info(f"[{instance}] still HTTP 429 after retry for r/{subreddit} — "
+                                     f"trying next source.")
+                        break
+                    if response.status != 200:
+                        logging.info(f"[{instance}] HTTP {response.status} for r/{subreddit} — trying next source.")
+                        break
+                    content = await response.text()
+                    feed = await asyncio.to_thread(feedparser.parse, content)
+                    if not feed.entries:
+                        logging.info(f"[{instance}] returned no RSS entries for r/{subreddit} "
+                                     f"(HTML block/interstitial page?) — trying next source.")
+                        break
+                    if not any("/comments/" in str(getattr(e, "link", "")) for e in feed.entries[:5]):
+                        logging.info(f"[{instance}] feed for r/{subreddit} contains no reddit post links — "
+                                     f"trying next source.")
+                        break
+                    logging.info(f"Successfully fetched r/{subreddit} from {instance}")
+                    return feed
+            except Exception as e:
+                logging.info(f"[{instance}] error for r/{subreddit}: {e} — trying next source.")
+                break
     logging.warning(f"Could not fetch valid RSS feed for r/{subreddit} from any instance.")
     return None
 
@@ -351,7 +411,13 @@ async def main():
     now = time.time()
 
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_working_reddit_feed(session, sub) for sub in SUBREDDITS]
+        # Stagger the fetch starts so the six subreddits don't all hit
+        # www.reddit.com in the same second (the burst that triggers 429s).
+        async def _staggered_fetch(sub: str, index: int):
+            await asyncio.sleep(index * FEED_FETCH_STAGGER)
+            return await fetch_working_reddit_feed(session, sub)
+
+        tasks = [_staggered_fetch(sub, i) for i, sub in enumerate(SUBREDDITS)]
         feeds = await asyncio.gather(*tasks)
 
         for subreddit, feed in zip(SUBREDDITS, feeds):
