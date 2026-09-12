@@ -56,6 +56,8 @@ public URL being looked up):
 | **gif.fxtwitter.com** | One HEAD probe per X GIF to check the animated WebP rendition exists before using it | https://fxtwitter.com |
 | **fastgif-production.up.railway.app** | Only when the above probe fails: one HEAD probe per X GIF to check the converted animated GIF exists; if it answers, Discord fetches that converted GIF when rendering the post. Independent third-party service, unaffiliated with this project or FxTwitter | https://railway.app |
 | **EmbedEZ API** (Reddit V2 only) | Reddit post metadata, media | https://embedez.com |
+| **redditez.com** (Reddit V1 default mirror) | No direct contact: the Service only *constructs* the mirror link from the public post path; **Discord's servers** fetch that URL to render the unfurled embed | https://www.redditez.com |
+| **embeddit.deltandy.me / vxreddit.com** (only if you switch `REDDIT_MIRROR`) | Same as above — link construction only; Discord fetches the mirror when rendering. Both are independent community projects, unaffiliated with this project | https://embeddit.deltandy.me |
 | **reddit.com** | Public subreddit RSS | https://www.reddit.com/policies/privacy-policy |
 | **cron-job.org** (optional) | External schedule trigger | https://cron-job.org/en/privacy/ |
 

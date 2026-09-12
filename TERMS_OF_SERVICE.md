@@ -37,7 +37,9 @@ You agree NOT to use the Service to:
 
 The Service depends on free/community-run third parties — Nitter mirrors, Redlib, FxTwitter/FxEmbed,
 the independent "fastgif" GIF converter (fastgif-production.up.railway.app, used only as a
-probe-verified fallback when FxTwitter's GIF CDN is down), EmbedEZ, reddit.com RSS, GitHub Actions,
+probe-verified fallback when FxTwitter's GIF CDN is down), EmbedEZ, the redditez.com /
+Embeddit (embeddit.deltandy.me) / vxReddit (vxreddit.com) Reddit-embed mirrors (V1 switchable),
+reddit.com RSS, GitHub Actions,
 cron-job.org, and Discord webhooks. **Availability is not
 guaranteed**: mirrors rotate or shut down, APIs change (EmbedEZ explicitly warns of breaking
 changes), GitHub's native scheduler is best-effort, and the EmbedEZ API may consume paid credits per

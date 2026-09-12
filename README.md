@@ -83,7 +83,7 @@ and to [@isovel](https://github.com/isovel), creator of FxTwitter/FxEmbed — do
 ├── main.py                      # X/Twitter — V1 (classic content + fxtwitter embed)
 ├── main_v2.py                   # X/Twitter — V2 (Components V2, buttons OUTSIDE)
 ├── main_v3.py                   # X/Twitter — V3 (Components V2, buttons INSIDE)
-├── reddit_main.py               # Reddit — V1 (free, redditez auto-embed)
+├── reddit_main.py               # Reddit — V1 (free, mirror auto-embed: redditez/embeddit/vxreddit)
 ├── reddit_main_v2.py            # Reddit — V2 (Components V2 via EmbedEZ API)
 ├── posted_tweets.json           # X cache (auto-committed) — start with: []
 ├── posted_reddit.json           # Reddit cache (auto-committed) — start with: []
@@ -324,8 +324,9 @@ Discord channel.
 
 | Secret | Value |
 |---|---|
-| `SUBREDDITS` | Comma-separated subreddit names, e.g. `Zenlesszonezeroleaks_` |
-| `WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_` | Webhook for that sub's channel (rule: `WEBHOOK_REDDIT_` + UPPERCASE name, non-alphanumerics → `_`) |
+| `SUBREDDITS` | Comma-separated subreddit names, e.g. `Zenlesszonezeroleaks_,Genshin_Impact_Leaks,HonkaiStarRail_leaks,WutheringWavesLeaks,HonkaiNexusAnimaLeaks,AnantaLeaks` |
+| `WEBHOOK_REDDIT_<SUB>` | One per subreddit's channel (rule: `WEBHOOK_REDDIT_` + UPPERCASE name, non-alphanumerics → `_`). For the default six: `WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_`, `WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS`, `WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS`, `WEBHOOK_REDDIT_WUTHERINGWAVESLEAKS`, `WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS`, `WEBHOOK_REDDIT_ANANTALEAKS` |
+| `REDDIT_MIRROR` *(optional — set as a repo **Variable**, not a Secret)* | **V1 only.** Embed mirror host: `redditez.com` (default), `embeddit.deltandy.me`, or `vxreddit.com` |
 | `EMBEDEZ_API_KEY` | **V2 only** — from your embedez.com dashboard |
 | `DISCORD_WEBHOOK_URL` *(optional)* | Catch-all fallback |
 
@@ -366,6 +367,12 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           EMBEDEZ_API_KEY: ${{ secrets.EMBEDEZ_API_KEY }}
           WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_: ${{ secrets.WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_ }}
+          WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS: ${{ secrets.WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS }}
+          WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS: ${{ secrets.WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS }}
+          WEBHOOK_REDDIT_WUTHERINGWAVESLEAKS: ${{ secrets.WEBHOOK_REDDIT_WUTHERINGWAVESLEAKS }}
+          WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS: ${{ secrets.WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS }}
+          WEBHOOK_REDDIT_ANANTALEAKS: ${{ secrets.WEBHOOK_REDDIT_ANANTALEAKS }}
+          REDDIT_MIRROR: ${{ vars.REDDIT_MIRROR }}   # optional (V1): blank/omitted = redditez.com
         run: python reddit_main.py   # ← switch to reddit_main_v2.py for the rich card
 
       - name: Commit and push updated posted_reddit.json cache
@@ -384,6 +391,19 @@ by design).
 * **Buttons were trimmed.** The Embeddit and vxReddit mirror buttons are **gone** (see concerns §6),
   and *Read Post* now points to the **original `https://www.reddit.com/...` permalink** — not the
   redditez mirror. Mirrors stay credited at the top of this README.
+* **Switching the V1 embed mirror (redditez ⇄ Embeddit ⇄ vxReddit).** By default V1 posts the
+  redditez link (plain reddit links don't unfurl richly via plain webhooks). All three mirrors
+  accept the **same** `/r/<sub>/comments/…` path format and were verified live (2026-09-12) to
+  serve embed meta to Discordbot, so switching is pure configuration — no code edit:
+  1. Repo → **Settings → Secrets and variables → Actions → *Variables* tab** → new variable
+     **`REDDIT_MIRROR`** = `embeddit.deltandy.me` or `vxreddit.com` (full `https://…/` URLs are
+     tolerated; they're normalized down to the host).
+  2. In `reddit_monitor.yml` make sure the env block contains
+     `REDDIT_MIRROR: ${{ vars.REDDIT_MIRROR }}` (it already does in the sample above).
+  3. Next run uses the new mirror. Switch back anytime by setting the variable to `redditez.com`
+     (or deleting it).
+  **Reddit V2 needs nothing** — it fetches post data from the EmbedEZ API and builds its own
+  Components V2 card, so no mirror is involved at all.
 * **YouTube posts get a playable embed (V1).** If the thread body links to YouTube (`watch?`,
   `shorts/` or `youtu.be`), the bare YouTube URL is appended on its own line after the redditez
   link — verified to auto-embed a working YouTube player alongside the reddit embed. A conditional
@@ -548,8 +568,14 @@ WEBHOOK_POMPOM_HONKAISR=https://discord.com/api/webhooks/...
 WEBHOOK_WUTHERING_WAVES=https://discord.com/api/webhooks/...
 WEBHOOK_HONKAINA=https://discord.com/api/webhooks/...
 WEBHOOK_ANANTA_EN=https://discord.com/api/webhooks/...
-SUBREDDITS=Zenlesszonezeroleaks_
+SUBREDDITS=Zenlesszonezeroleaks_,Genshin_Impact_Leaks,HonkaiStarRail_leaks,WutheringWavesLeaks,HonkaiNexusAnimaLeaks,AnantaLeaks
 WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_=https://discord.com/api/webhooks/...
+WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS=https://discord.com/api/webhooks/...
+WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS=https://discord.com/api/webhooks/...
+WEBHOOK_REDDIT_WUTHERINGWAVESLEAKS=https://discord.com/api/webhooks/...
+WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS=https://discord.com/api/webhooks/...
+WEBHOOK_REDDIT_ANANTALEAKS=https://discord.com/api/webhooks/...
+REDDIT_MIRROR=redditez.com   # optional, V1 only: embeddit.deltandy.me | vxreddit.com
 EMBEDEZ_API_KEY=ez_...       # Reddit V2 only
 ```
 
@@ -614,6 +640,16 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 ## 🗒 Changelog
 
+* **2026-09-12 — round 7:**
+  * **Five new default subreddits** added to both Reddit engines:
+    `Genshin_Impact_Leaks`, `HonkaiStarRail_leaks`, `WutheringWavesLeaks`, `HonkaiNexusAnimaLeaks`,
+    `AnantaLeaks` (all verified live/active). Matching per-sub secrets
+    (`WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS` … `WEBHOOK_REDDIT_ANANTALEAKS`) documented, and the
+    sample `reddit_monitor.yml`/`.env` updated.
+  * **Switchable V1 embed mirror:** new optional **`REDDIT_MIRROR`** repo Variable — `redditez.com`
+    (default), `embeddit.deltandy.me`, or `vxreddit.com`. All three were verified live to accept
+    the same post path and serve embed meta to Discordbot. Host normalization tolerates full URLs.
+    Reddit V2 is unaffected (EmbedEZ API builds the card itself).
 * **2026-09-12 — round 6:**
   * **GIF resilience — fastgif fallback added.** With `gif.fxtwitter.com`'s CDN still down
     (530/1033), GIF posts were falling back to mp4 players. GIFs now resolve through a two-source
