@@ -2,7 +2,7 @@ name: Reddit Feed Monitor
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # backup only — GitHub cron is best-effort
+    - cron: '*/5 * * * *'   # backup only — GitHub cron is best-effort
   workflow_dispatch:          # allows manual + external-cron triggering
 
 permissions:
