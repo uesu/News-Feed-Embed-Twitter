@@ -48,7 +48,7 @@ jobs:
         #       run: python main_v2.py    <- V2 (card, buttons outside)
         #       run: python main_v3.py    <- V3 (card, buttons nested)
         # ───────────────────────────────────────────────────────────────────
-        run: python "testing area/main_v2testpro.py"   # ← switch to main.py / main_v2.py here
+        run: python "testing area/main_v3testpro.py"   # ← switch to main.py / main_v2.py here
 
       - name: Commit and push updated posted_tweets.json cache
         run: |
