@@ -25,10 +25,24 @@
 #   4. The old unofficial "/providers/combined?q=" endpoint from early docs is
 #      no longer documented — this script uses only the documented endpoints.
 #
-# ■ ROUND 8 (2026-09-12): same RSS source fixes as V1 — dead
-#   redlib.perennialte.ch removed (shut down 2026-08-31, answers HTTP 410);
-#   fresh Redlib fallback list (official redlib-instances, checked 2026-09-12);
-#   429 retry with backoff + staggered fetch starts.
+# ■ ROUND 8 (2026-09-12): dead redlib.perennialte.ch removed (shut down
+#   2026-08-31, answers HTTP 410); fresh Redlib fallback list; 429 retry with
+#   backoff + staggered fetch starts.
+#
+# ■ ROUND 9 (2026-09-13): same feed changes as V1 —
+#   • PRIMARY SOURCE IS NOW ONE COMBINED FEED:
+#       https://www.reddit.com/r/sub1+sub2+.../new.rss?limit=100
+#     verified live 2026-09-13 — 1 HTTP request covers ALL subreddits, which
+#     fits inside Reddit's ~1 request/minute anonymous limit per datacenter
+#     IP. Entries are routed to per-channel webhooks via their permalinks.
+#   • Per-subreddit fetches remain as automatic fallback (instance rotation +
+#     two 429 retries: 6s and 45s).
+#   • REDDIT_FEED_TOKEN (repo secret): your personal feed token from
+#     old.reddit.com -> Preferences -> Feeds, appended as ?feed=<token>.
+#   • All public Redlib/Eddrit mirrors live-probed 2026-09-13: every official
+#     registry instance is behind Anubis/Cloudflare/gammaspectra bot
+#     challenges (or dead) — a few kept as fallback lottery tickets.
+#   The EmbedEZ card code below is UNCHANGED from round 8.
 # ---------------------------------------------------------------------------
 import os
 import re
@@ -49,6 +63,17 @@ SUBREDDITS = [s.strip() for s in SUBREDDITS_STR.split(",") if s.strip()]
 DEFAULT_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 EMBEDEZ_API_KEY = os.getenv("EMBEDEZ_API_KEY")
 
+# ---------------------------------------------------------------------------
+# ■ REDDIT FEED TOKEN (recommended)
+# ---------------------------------------------------------------------------
+# Since June 2026 Reddit rate-limits ANONYMOUS RSS from datacenter IPs to
+# roughly 1 request/minute per IP. The combined feed (one request per run)
+# already fits that, but your personal feed token makes it bulletproof.
+# Get it: old.reddit.com -> Preferences -> Feeds -> copy the "?feed=..."
+# value from any feed link (the token itself, without "?feed=").
+# Store it as the REDDIT_FEED_TOKEN secret.
+REDDIT_FEED_TOKEN = os.getenv("REDDIT_FEED_TOKEN", "").strip()
+
 CACHE_FILE = "posted_reddit.json"
 MAX_CACHE_SIZE = 500
 
@@ -57,40 +82,43 @@ MAX_CACHE_SIZE = 500
 MAX_AGE_SECONDS = 48 * 3600
 
 # ---------------------------------------------------------------------------
-# ■ RSS SOURCES (tried in order)
+# ■ RSS SOURCES
 #
-#   • www.reddit.com  -> native Reddit RSS; usually works, but aggressively
-#     rate-limits datacenter IPs (HTTP 429) when several feeds are fetched
-#     back-to-back — the script retries once after RATE_LIMIT_RETRY_DELAY.
-#   • old.reddit.com  -> often returns an HTML "Welcome to Reddit" interstitial
-#                        to datacenter IPs (0 entries) — fallback only.
-#   • Redlib mirrors  -> community Redlib instances, list refreshed
-#                        2026-09-12 from github.com/redlib-org/redlib-instances.
-#                        (redlib.perennialte.ch was SHUT DOWN 2026-08-31 and
-#                        now answers HTTP 410 — removed.)
-#                        Note: safereddit.com is SFW-only — fine as fallback.
+# PRIMARY (round 9): ONE COMBINED feed request for ALL subreddits
+# (see _combined_feed_url below) — always www.reddit.com.
+#
+# FALLBACK (only if the combined feed fails), tried in order:
+#   • www.reddit.com  -> native Reddit RSS (+ ?feed= token when set).
+#   • old.reddit.com  -> HTML "Welcome to Reddit" interstitial to datacenter
+#                        IPs (0 entries) — fallback only.
+#   • Redlib mirrors  -> ALL official registry instances live-probed
+#                        2026-09-13: behind Anubis/Cloudflare/gammaspectra
+#                        bot challenges, or dead (410/404/SSL). Kept only in
+#                        case a challenge ever relaxes. Refresh candidates at
+#                        github.com/redlib-org/redlib-instances.
 # The script validates that the response actually CONTAINS reddit permalinks
 # before accepting it, and logs why each source was skipped.
 # ---------------------------------------------------------------------------
 REDDIT_RSS_INSTANCES = [
     "https://www.reddit.com",
     "https://old.reddit.com",
-    "https://safereddit.com",
-    "https://red.artemislena.eu",
-    "https://redlib.privacyredirect.com",
-    "https://redlib.privadency.com",
-    "https://redlib.nadeko.net",
-    "https://redlib.ducks.party",
-    "https://redlib.catsarch.com",
-    "https://snoo.habedieeh.re",
+    "https://safereddit.com",           # 2026-09-13: Anubis bot check (fallback lottery)
+    "https://red.artemislena.eu",       # 2026-09-13: Anubis bot check (fallback lottery)
+    "https://redlib.privacyredirect.com",  # 2026-09-13: Anubis bot check (fallback lottery)
 ]
 
-# Wait this long before retrying the SAME source once after an HTTP 429.
-RATE_LIMIT_RETRY_DELAY = 6
-# Start each subreddit's feed fetch this many seconds after the previous one,
-# so six subs don't all hit www.reddit.com in the same second (the burst
-# that triggers 429s).
+# 429 (rate limit) retry waits: first retry after 6s (short bursts, verified
+# effective on GitHub runners), second after 45s (rides out the ~1/minute
+# anonymous window refill — verified live 2026-09-13).
+RATE_LIMIT_RETRY_DELAY_1 = 6
+RATE_LIMIT_RETRY_DELAY_2 = 45
+# Start each subreddit's feed fetch this many seconds after the previous one
+# (fallback mode only), so six subs don't all hit www.reddit.com in the same
+# second (the burst that triggers 429s).
 FEED_FETCH_STAGGER = 1.2
+# How many entries the combined feed returns (Reddit default 25, max 100 —
+# 100 verified working; covers quiet subreddits in busy runs).
+COMBINED_FEED_LIMIT = 100
 
 EMBEDEZ_SEARCH_URL = "https://embedez.com/api/v1/providers/search"
 EMBEDEZ_PREVIEW_URL = "https://embedez.com/api/v1/providers/preview"
@@ -121,6 +149,7 @@ def get_webhook_for_subreddit(subreddit: str) -> str | None:
     if webhook:
         return webhook
     if DEFAULT_WEBHOOK_URL:
+        logging.warning(f"No dedicated webhook for r/{subreddit} (expected {env_key}). Using fallback.")
         return DEFAULT_WEBHOOK_URL
     return None
 
@@ -148,6 +177,12 @@ def normalize_reddit_path(link: str) -> str | None:
     return match.group(1).rstrip("/") + "/" if match else None
 
 
+def extract_subreddit(path: str) -> str | None:
+    """/r/<name>/comments/... -> <name>  (routes combined-feed entries)."""
+    match = re.match(r"/r/([^/]+)/", path or "")
+    return match.group(1) if match else None
+
+
 def extract_post_id(path: str) -> str | None:
     match = re.search(r"/comments/([a-zA-Z0-9]+)/", path)
     return match.group(1) if match else None
@@ -163,6 +198,14 @@ def extract_youtube_url(entry) -> str | None:
         match = YOUTUBE_RE.search(html or "")
         if match:
             return match.group(0)
+    return None
+
+
+def _subreddit_by_name(name: str) -> str | None:
+    """Case-insensitive match of a permalink name against our SUBREDDITS."""
+    for sub in SUBREDDITS:
+        if sub.lower() == (name or "").lower():
+            return sub
     return None
 
 
@@ -189,59 +232,134 @@ def resolve_post_timestamp(content: dict, fallback_ts: float) -> int:
     return int(fallback_ts)
 
 
-async def fetch_working_reddit_feed(session: aiohttp.ClientSession, subreddit: str):
+async def _fetch_feed(session: aiohttp.ClientSession, feed_url: str, label: str):
     """
-    Tries each RSS source in order. A source is only accepted if:
+    GETs one feed URL with two 429 retries (6s, then 45s). A source is only
+    accepted if:
       1. HTTP 200,
       2. feedparser finds entries,
       3. the first entries actually contain reddit /comments/ permalinks
-         (rejects HTML interstitial/block pages that return 200 with junk).
-    HTTP 429 (rate limited — common on www.reddit.com when several feeds are
-    fetched back-to-back from the same IP) is retried ONCE after
-    RATE_LIMIT_RETRY_DELAY seconds before moving to the next source.
+         (rejects HTML interstitial/bot-check/"loading takes a moment" pages
+         that return 200 with junk).
     Every rejection is logged so Actions logs show exactly why a source failed.
     """
     headers = {
         **BROWSER_HEADERS,
         "Accept": "application/rss+xml, application/xml, text/xml, */*",
     }
+    retry_delays = [RATE_LIMIT_RETRY_DELAY_1, RATE_LIMIT_RETRY_DELAY_2]
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            async with session.get(feed_url, headers=headers,
+                                   timeout=aiohttp.ClientTimeout(total=15)) as response:
+                if response.status == 429:
+                    if attempt - 1 < len(retry_delays):
+                        delay = retry_delays[attempt - 1]
+                        logging.info(f"[{label}] HTTP 429 (rate limited) — retry {attempt} in {delay}s.")
+                        await asyncio.sleep(delay)
+                        continue
+                    logging.info(f"[{label}] still HTTP 429 after {attempt - 1} retries — giving up.")
+                    return None
+                if response.status != 200:
+                    logging.info(f"[{label}] HTTP {response.status} — rejected.")
+                    return None
+                content = await response.text()
+                feed = await asyncio.to_thread(feedparser.parse, content)
+                if not feed.entries:
+                    logging.info(f"[{label}] no RSS entries (bot-check/interstitial/HTML page?) — rejected.")
+                    return None
+                if not any("/comments/" in str(getattr(e, "link", "")) for e in feed.entries[:5]):
+                    logging.info(f"[{label}] entries contain no reddit /comments/ links — rejected.")
+                    return None
+                return feed
+        except Exception as e:
+            logging.info(f"[{label}] error: {e}")
+            return None
+
+
+def _combined_feed_url() -> str:
+    """ONE feed for all tracked subreddits: /r/a+b+c/new.rss?limit=100 (+ token)."""
+    url = "https://www.reddit.com/r/" + "+".join(SUBREDDITS) + f"/new.rss?limit={COMBINED_FEED_LIMIT}"
+    if REDDIT_FEED_TOKEN:
+        url += f"&feed={REDDIT_FEED_TOKEN}"
+    return url
+
+
+async def fetch_combined_feed(session: aiohttp.ClientSession):
+    logging.info(f"Fetching combined feed for {len(SUBREDDITS)} subreddits in 1 request...")
+    feed = await _fetch_feed(session, _combined_feed_url(), "combined")
+    if feed:
+        covered = set()
+        for e in feed.entries:
+            path = normalize_reddit_path(str(getattr(e, "link", "")))
+            sub = _subreddit_by_name(extract_subreddit(path)) if path else None
+            if sub:
+                covered.add(sub)
+        logging.info(f"Combined feed OK: {len(feed.entries)} entries covering {len(covered)} subreddit(s).")
+    return feed
+
+
+async def fetch_working_reddit_feed(session: aiohttp.ClientSession, subreddit: str):
+    """Fallback mode: tries each RSS source in order for one subreddit."""
     for instance in REDDIT_RSS_INSTANCES:
         feed_url = f"{instance}/r/{subreddit}/new/.rss"
-        attempt = 0
-        while attempt < 2:
-            attempt += 1
-            try:
-                async with session.get(feed_url, headers=headers,
-                                       timeout=aiohttp.ClientTimeout(total=15)) as response:
-                    if response.status == 429:
-                        if attempt == 1:
-                            logging.info(f"[{instance}] HTTP 429 (rate limited) for r/{subreddit} — "
-                                         f"retrying in {RATE_LIMIT_RETRY_DELAY}s.")
-                            await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
-                            continue
-                        logging.info(f"[{instance}] still HTTP 429 after retry for r/{subreddit} — "
-                                     f"trying next source.")
-                        break
-                    if response.status != 200:
-                        logging.info(f"[{instance}] HTTP {response.status} for r/{subreddit} — trying next source.")
-                        break
-                    content = await response.text()
-                    feed = await asyncio.to_thread(feedparser.parse, content)
-                    if not feed.entries:
-                        logging.info(f"[{instance}] returned no RSS entries for r/{subreddit} "
-                                     f"(HTML block/interstitial page?) — trying next source.")
-                        break
-                    if not any("/comments/" in str(getattr(e, "link", "")) for e in feed.entries[:5]):
-                        logging.info(f"[{instance}] feed for r/{subreddit} contains no reddit post links — "
-                                     f"trying next source.")
-                        break
-                    logging.info(f"Successfully fetched r/{subreddit} from {instance}")
-                    return feed
-            except Exception as e:
-                logging.info(f"[{instance}] error for r/{subreddit}: {e} — trying next source.")
-                break
+        # The personal feed token only applies to Reddit's own hosts.
+        if REDDIT_FEED_TOKEN and "reddit.com" in instance:
+            feed_url += f"?feed={REDDIT_FEED_TOKEN}"
+        feed = await _fetch_feed(session, feed_url, instance)
+        if feed:
+            logging.info(f"Successfully fetched r/{subreddit} from {instance}")
+            return feed
     logging.warning(f"Could not fetch valid RSS feed for r/{subreddit} from any instance.")
     return None
+
+
+def collect_new_posts(entries, posted: set, is_first_run: bool, now: float,
+                      known_subreddit: str | None) -> dict:
+    """
+    Filters feed entries (dedup + mod-queue-safe age check) and returns
+    {subreddit: [post dict, ...]}. If known_subreddit is None the subreddit
+    is read from each entry's permalink (combined-feed mode).
+    """
+    found = {}
+    for entry in entries:
+        raw_link = str(getattr(entry, "link", ""))
+        path = normalize_reddit_path(raw_link)
+        if not path:
+            continue
+        if known_subreddit:
+            sub = known_subreddit
+        else:
+            sub = _subreddit_by_name(extract_subreddit(path))
+            if not sub:
+                continue
+        post_id = extract_post_id(path)
+        if not post_id:
+            continue
+        unique_key = f"{sub}_{post_id}"
+        if unique_key in posted:
+            continue
+
+        # --- mod-queue safe age check (approval bumps 'updated') ---
+        published_parsed = entry.get("published_parsed")
+        updated_parsed = entry.get("updated_parsed")
+        published_ts = time.mktime(published_parsed) if published_parsed else now
+        updated_ts = time.mktime(updated_parsed) if updated_parsed else published_ts
+        activity_ts = max(published_ts, updated_ts)
+        if not is_first_run and (now - activity_ts > MAX_AGE_SECONDS):
+            continue
+        # ------------------------------------------------------------
+
+        found.setdefault(sub, []).append({
+            "path": path,
+            "unique_key": unique_key,
+            "published_ts": published_ts,
+            "activity_ts": activity_ts,
+            "youtube_url": extract_youtube_url(entry),
+        })
+    return found
 
 
 async def fetch_embedez_data(session: aiohttp.ClientSession, reddit_url: str) -> dict | None:
@@ -405,71 +523,81 @@ async def main():
         logging.warning("EMBEDEZ_API_KEY is missing — cards will use limited public preview data. "
                         "For full media/stats, add the EMBEDEZ_API_KEY secret (watch your credit balance), "
                         "or switch the workflow to reddit_main.py (V1, free, no key).")
+    if not REDDIT_FEED_TOKEN:
+        logging.warning("REDDIT_FEED_TOKEN not set — running anonymously. The combined feed "
+                        "(1 request/run) usually fits the ~1 req/min limit, but add your feed "
+                        "token (old.reddit.com -> Preferences -> Feeds) to be bulletproof.")
 
     posted = load_posted()
     is_first_run = len(posted) == 0
     now = time.time()
+    found = {}
 
     async with aiohttp.ClientSession() as session:
-        # Stagger the fetch starts so the six subreddits don't all hit
-        # www.reddit.com in the same second (the burst that triggers 429s).
-        async def _staggered_fetch(sub: str, index: int):
-            await asyncio.sleep(index * FEED_FETCH_STAGGER)
-            return await fetch_working_reddit_feed(session, sub)
+        # ---- PRIMARY: one combined request for all subreddits -----------
+        combined = await fetch_combined_feed(session)
+        if combined and combined.entries:
+            entries = [combined.entries[0]] if is_first_run else combined.entries
+            found = collect_new_posts(entries, posted, is_first_run, now,
+                                      known_subreddit=None)
+        else:
+            # ---- FALLBACK: per-subreddit feeds (staggered) --------------
+            logging.info("Combined feed unavailable — falling back to per-subreddit feeds...")
 
-        tasks = [_staggered_fetch(sub, i) for i, sub in enumerate(SUBREDDITS)]
-        feeds = await asyncio.gather(*tasks)
+            async def _staggered_fetch(sub: str, index: int):
+                await asyncio.sleep(index * FEED_FETCH_STAGGER)
+                return await fetch_working_reddit_feed(session, sub)
 
-        for subreddit, feed in zip(SUBREDDITS, feeds):
-            if not feed or not feed.entries:
+            feeds = await asyncio.gather(*[_staggered_fetch(sub, i) for i, sub in enumerate(SUBREDDITS)])
+            for subreddit, feed in zip(SUBREDDITS, feeds):
+                if not feed or not feed.entries:
+                    continue
+                entries = [feed.entries[0]] if is_first_run else feed.entries
+                f = collect_new_posts(entries, posted, is_first_run, now,
+                                      known_subreddit=subreddit)
+                if f.get(subreddit):
+                    found.setdefault(subreddit, []).extend(f[subreddit])
+        # ------------------------------------------------------------------
+
+        total_found = sum(len(v) for v in found.values())
+        if total_found == 0:
+            logging.info("No new Reddit posts to post.")
+            save_posted(posted)
+            return
+
+        logging.info(f"Found {total_found} new Reddit posts. Fetching EmbedEZ cards...")
+
+        for subreddit in SUBREDDITS:
+            posts = found.get(subreddit)
+            if not posts:
                 continue
             webhook_url = get_webhook_for_subreddit(subreddit)
             if not webhook_url:
                 logging.error(f"No webhook configured for r/{subreddit}. Skipping.")
                 continue
-            entries = [feed.entries[0]] if is_first_run else feed.entries
-            for entry in entries:
-                raw_link = getattr(entry, "link", "")
-                path = normalize_reddit_path(raw_link)
-                if not path:
-                    continue
-                post_id = extract_post_id(path)
-                if not post_id:
-                    continue
-                unique_key = f"{subreddit}_{post_id}"
-                if unique_key in posted:
-                    continue
-
-                # --- mod-queue safe age check (approval bumps 'updated') ---
-                published_parsed = entry.get("published_parsed")
-                updated_parsed = entry.get("updated_parsed")
-                published_ts = time.mktime(published_parsed) if published_parsed else now
-                updated_ts = time.mktime(updated_parsed) if updated_parsed else published_ts
-                activity_ts = max(published_ts, updated_ts)
-                if not is_first_run and (now - activity_ts > MAX_AGE_SECONDS):
-                    continue
-                # ------------------------------------------------------------
-
+            posts.sort(key=lambda p: p["published_ts"])
+            for post in posts:
+                path = post["path"]
                 reddit_url = f"https://www.reddit.com{path}"
-                youtube_url = extract_youtube_url(entry)
+                youtube_url = post["youtube_url"]
 
                 embedez_data = await fetch_embedez_data(session, reddit_url)
                 if embedez_data is None:
-                    logging.warning(f"Skipping {unique_key}: could not fetch EmbedEZ data.")
+                    logging.warning(f"Skipping {post['unique_key']}: could not fetch EmbedEZ data.")
                     continue
 
-                posted_ts = resolve_post_timestamp(embedez_data.get("content") or {}, activity_ts)
+                posted_ts = resolve_post_timestamp(embedez_data.get("content") or {}, post["activity_ts"])
                 payload = build_v2_payload(subreddit, embedez_data, reddit_url,
                                            youtube_url=youtube_url, posted_ts=posted_ts)
                 target_url = f"{webhook_url}?with_components=true"
                 async with session.post(target_url, json=payload) as resp:
                     if resp.status in (200, 204):
-                        posted.add(unique_key)
-                        logging.info(f"Reddit V2 Posted: {unique_key}")
+                        posted.add(post["unique_key"])
+                        logging.info(f"Reddit V2 Posted: {post['unique_key']}")
                         await asyncio.sleep(1.5)
                     else:
                         body = await resp.text()
-                        logging.error(f"Discord error {resp.status} for {unique_key}: {body}")
+                        logging.error(f"Discord error {resp.status} for {post['unique_key']}: {body}")
 
     save_posted(posted)
     logging.info("Reddit V2 Monitor execution finished.")
