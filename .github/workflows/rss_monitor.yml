@@ -35,6 +35,19 @@ jobs:
           WEBHOOK_WUTHERING_WAVES: ${{ secrets.WEBHOOK_WUTHERING_WAVES }}
           WEBHOOK_HONKAINA: ${{ secrets.WEBHOOK_HONKAINA }}
           WEBHOOK_ANANTA_EN: ${{ secrets.WEBHOOK_ANANTA_EN }}
+        # ───────────────────────────────────────────────────────────────────
+        # TESTING AREA (how updates ship):
+        # • A new/changed script lives in "testing area/" FIRST (e.g.
+        #   main_v3test.py). Point this line at the test copy — THE QUOTES
+        #   ARE REQUIRED (the folder name contains a space):
+        #       run: python "testing area/main_v3test.py"
+        # • Check BOTH the Discord post(s) AND this workflow's log.
+        # • Once the test copy passes, copy it over the production file and
+        #   point this line back:
+        #       run: python main.py       <- V1 (plain, no API key)
+        #       run: python main_v2.py    <- V2 (card, buttons outside)
+        #       run: python main_v3.py    <- V3 (card, buttons nested)
+        # ───────────────────────────────────────────────────────────────────
         run: python "testing area/main_v3test.py"   # ← switch to main.py / main_v2.py here
 
       - name: Commit and push updated posted_tweets.json cache
