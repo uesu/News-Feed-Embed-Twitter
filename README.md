@@ -42,6 +42,10 @@ and to [@isovel](https://github.com/isovel), creator of FxTwitter/FxEmbed — do
   - **V3** — same rich card, but buttons **nested inside** the container.
 - 🌐 **Automatic English translation** — non-English tweets show a *"Translated from X"* block with the
   original text preserved, via FxTwitter's `/en` translation endpoint (works on V1/V2/V3).
+- 📄 **Full X Articles (V2/V3, round 10)** — article tweets post their **cover image, title, full body
+  text, and every in-article image/GIF** (GIFs animated via the same converter chain) straight into the
+  card, from FxTwitter's article JSON — no scraping. One caveat: FxTwitter doesn't translate article
+  bodies, so non-English articles post in their original language.
 - 🎯 **Multi-webhook routing** — each tracked X account posts to its own Discord channel
   (`WEBHOOK_<ACCOUNT>` secrets), with an optional catch-all fallback webhook.
 - 📰 **Reddit monitor** with two engines:
@@ -63,7 +67,7 @@ and to [@isovel](https://github.com/isovel), creator of FxTwitter/FxEmbed — do
   every video's **real file size is probed** (HTTP HEAD) before posting. Oversized videos are
   swapped for the biggest **smaller mp4 variant** from FxTwitter's `formats[]` that still fits
   (stays playable!), with a thumbnail + "Watch on X" link as last resort. Resolution is irrelevant —
-  it's all about file size (see the live test table below).
+  it's all about file size (see the live test tables below).
 - 🕐 **Exact timestamps (V2/V3, X & Reddit)** — every card's stats line ends with a Discord-native
   `<t:…:f>` timestamp; hover/tap for the post's exact date & time.
 - 🛡 **Mod-queue safe (Reddit)** — a 48-hour freshness window keyed on the RSS *updated* stamp means
@@ -207,7 +211,8 @@ Fixes and formats added after real feed runs:
   tweet's own `x.com` page and reads its OpenGraph image — for X Articles that's the **article
   banner**, for link posts (e.g. `hoyo.link`) it's the **card image**. Fallback: the first external
   link's `og:image` (works for hoyoverse/kurogames pages). Profile pictures are never used, and the
-  extra fetch is skipped for normal tweets.
+  extra fetch is skipped for normal tweets. (Round 10 supersedes this for articles — see below: the
+  full article now renders, not just its banner.)
 * **GIF support.** X "GIFs" are internally tiny looping mp4s (`tweet_video/*.mp4`). When detected,
   the script swaps in a real **animated image** so it plays inline instead of sitting in a video
   player. Two community converters are probed in order — **never forced**:
@@ -237,6 +242,55 @@ Fixes and formats added after real feed runs:
   `<a:starwardfans:1509026327548657914>`.
 * **Interactive campaign tweets** (multi-photo, e.g. the "mysterious manuscript" Wuthering post) —
   all 4 photos render in the gallery; verified against the live API.
+
+## 🆕 X V2/V3 card behaviors — round 10 (2026-09-13)
+
+* **Full X Article support (verified live).** FxTwitter's API returns each article as clean JSON
+  (`tweet.article`: title, cover image, draft.js text blocks, in-article media) — no x.com scraping,
+  no login. Article tweets now post as: **cover image** (right under the header) → **title** + full
+  body text (chunked exactly like tweets) → **in-article media gallery** (images as-is; in-article
+  GIFs go through the same animated `gif.fxtwitter` → `fastgif` chain; in-article videos get the
+  same size probe / downgrade handling) → stats → buttons. The round-4 "banner only" OpenGraph
+  behavior no longer applies to articles — they render fully.
+  * Note: FxTwitter does **not** translate article bodies (there is no `/en` for them), so
+    non-English articles post in their original language. Normal tweets still get `/en`.
+  * Verified live 2026-09-13: HonkaiNA "DevTalk | Evolution Test Wrap-Up" posted as cover + title +
+    text + 4-item gallery (3 images + 1 animated GIF); log line
+    `V3 Posted: HonkaiNA_2081590638282432606 (lang=en | article)`.
+* **Video gallery limit — live re-verified with a full diagnostic.** A one-off diagnostic card
+  (`testing area/video_diag.py`) posted labeled test tiles at every size and URL style to a channel;
+  results 2026-09-13:
+
+  | Tile | Result |
+  |---|---|
+  | 19.3 MB / 10.6 MB (270p) | ✅ plays — all URL styles |
+  | **170.8 MB (720p)** — what the bot embeds | ✅ plays — all URL styles |
+  | **233.8 MB (1080p)** — what the bot embeds | ✅ plays — all URL styles |
+  | 521.7 MB (1080p) | ❌ "image not found" — every style |
+  | 824 MB / 1782 MB (4K) | ❌ "image not found" — every style |
+
+  So the 256 MB `VIDEO_SIZE_LIMIT` sits in a **proven-safe gap** (≤ 234 MB plays; ≥ 521 MB never
+  gets sent because the downgrade rule swaps first) — no default changed. The test also proved the
+  `?tag=` query parameter and the fxtwitter proxy origin are **irrelevant** to playability — the
+  plain direct URLs are what play.
+* **`GALLERY_VIDEO_LIMIT` (new constant, default `0` = off, behaviour unchanged).** An optional
+  extra safety cap for the gallery: if Discord's proxy ever breaks a ≤ 256 MB tile again, set it to
+  the largest size that proved playable (e.g. `GALLERY_VIDEO_LIMIT = 100 * 1024 * 1024`) — videos
+  above it then auto-downgrade to the largest variant at/below it (checking **all** variants, not
+  just the top 3), or post a "watch on X" note, so the gallery can never carry a tile Discord's
+  proxy can't play.
+* **"image not found" on an already-posted video — what to do.** Discord's media proxy fetches each
+  tile's URL **once**, when the message is created. If that single fetch hiccups (transient proxy
+  warm-up / CDN edge — the same class of event as the round-5 portrait case), the tile shows
+  "image not found" **for that message forever**: reloading Discord doesn't fix it, but
+  **re-posting the same URL works** (verified twice, 2026-09-13). The bot can't detect the failure
+  itself (the webhook answers "OK" before the proxy fetch even starts — no API exposes tile
+  status), so the recovery stays a 30-second manual fix:
+  1. Delete the broken message in Discord.
+  2. Remove that tweet's line (e.g. `"Ananta_EN_1970307131074355593"`) from `posted_tweets.json`.
+  3. Re-run the workflow (or just wait for the next 10-minute run).
+
+  As of 2026-09-13 this had happened exactly once (2 tiles out of hundreds of posts).
 
 ## 🌐 How translation works (all versions)
 
@@ -457,7 +511,8 @@ by design).
   bumps `updated`). A thread approved "tomorrow" still arrives. If your subs regularly take longer
   than 48h to approve, raise `MAX_AGE_SECONDS` near the top of the script.
 * **Reddit V2 fixes** — all EmbedEZ text fields are now HTML-sanitized (their authorized
-  `content.title` itself contains raw `<a>`/`<br>` tags, which previously rendered literally), and
+  `content.title` itself contains raw `<a>`/`<br>`
+  tags, which previously rendered literally), and
   the stats line ends with a 🕐 `<t:…:f>` timestamp (from EmbedEZ `postedDate`, falling back to the
   RSS date).
 
@@ -489,7 +544,8 @@ points before relying on it:
    always-visible duplicate mirror buttons added clutter without value. The mirrors remain fully
    credited at the top of this README.
 7. **HTML is stripped from every text field.** With a valid API key, EmbedEZ's `content.title` itself
-   contains HTML (`Posted in <a …>r/sub</a><br>…`) — earlier builds rendered those tags literally in
+   contains HTML (`Posted in <a …>r/sub</a>
+…`) — earlier builds rendered those tags literally in
    the Discord card. All title/description/text fields (authorized *and* public-preview) are
    sanitized now.
 8. **Components V2 can't auto-unfurl a bare YouTube link** inside a card (the auto-embed player is a
@@ -730,6 +786,11 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   the file exceeded the verified ~256 MB Discord gallery limit (e.g. 4K or very long videos). The
   card still plays a smaller rendition, or links out to X when even that is too big. Tune
   `VIDEO_SIZE_LIMIT` at the top of the script if Discord's behavior ever changes.
+* **A video tile says "image not found" (X V2/V3)** — rare, transient Discord proxy hiccup at fetch
+  time (not a URL or size problem — the same URL plays fine when re-posted, verified 2026-09-13).
+  The old message can't be repaired, so: delete it → remove that tweet's line from
+  `posted_tweets.json` → re-run the workflow (or wait for the next run). Full details in the
+  round-10 section. If it ever becomes frequent, set `GALLERY_VIDEO_LIMIT` to a smaller proven size.
 * **`Discord error 400 ... {"components": ["0"]}`** — old round-3 bug: a tweet with empty body (or
   over-length text) emitted an invalid empty text component. Fixed in round 4 — text is chunked and
   empty components are never sent. If it ever recurs, the Actions log prints the full Discord
@@ -766,6 +827,25 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 ## 🗒 Changelog
 
+* **2026-09-13 — round 10:**
+  * **Full X Article support (V2/V3)** — article tweets now post cover image + **title** + full
+    body text + in-article images/GIFs (GIFs animated via the existing gif.fxtwitter → fastgif
+    chain; in-article videos get the same size handling), all from FxTwitter's `tweet.article`
+    JSON — no scraping, no login. Verified live (HonkaiNA DevTalk article; log shows
+    `| article`). FxTwitter doesn't translate article bodies, so non-English articles post in
+    their original language (normal tweets still get `/en`).
+  * **Video gallery limit live re-verified** with a one-off diagnostic card
+    (`testing area/video_diag.py`, safe to delete): 171 MB & 234 MB tiles **play** in every URL
+    style; 521 MB+ **fail** ("image not found") in every style → the 256 MB default confirmed in a
+    proven-safe gap; `?tag` param and proxy origin proven irrelevant to playability.
+  * **New `GALLERY_VIDEO_LIMIT` safety cap** (default `0` = off, behavior unchanged): optional
+    extra gallery ceiling that auto-downgrades to the largest fitting variant (**all** variants
+    checked) or posts a "watch on X" note — the gallery can never embed an unplayable tile when
+    enabled.
+  * **Docs:** "image not found" recovery steps (transient Discord proxy failure on old messages —
+    delete message + remove its cache line + re-run; re-posting always works).
+  * **X V1 (`main.py`)** — default `ACCOUNTS` list now includes `Ananta_EN` (matches V2/V3);
+    header comment tidy-up only. No behavior changes.
 * **2026-09-13 — round 9:**
   * **Reddit reliability (live-verified):** primary fetch is now **ONE combined feed request**
     (`/r/sub1+sub2+.../new.rss?limit=100`) covering all subreddits — fits Reddit's
