@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Effective date:** September 11, 2026
+**Effective date:** September 13, 2026
 **Applies to:** the *News Feed Embed* / *Citlali News* X (Twitter) + Reddit → Discord monitor
 ("the Service"), an open-source, self-hosted automation tool.
 
@@ -22,7 +22,7 @@ operated by the author.
 | Data | Where it lives | Why | Shared with anyone? |
 |---|---|---|---|
 | Post/tweet IDs (e.g. `TYPEII_EN_2098063866303504597`) | `posted_tweets.json` / `posted_reddit.json` **inside your own repository**, committed by `github-actions[bot]` | Deduplication only — prevents posting the same item twice | No |
-| Webhook URLs & API keys | GitHub **encrypted repository secrets** in *your* repository | Authentication to Discord / EmbedEZ | No (GitHub stores them; they are never logged or transmitted elsewhere) |
+| Webhook URLs, API keys & the optional Reddit feed token | GitHub **encrypted repository secrets** in *your* repository | Authentication to Discord / EmbedEZ / Reddit | No (GitHub stores them; they are never logged or transmitted elsewhere — the feed token is sent only to reddit.com, never to any mirror or third party) |
 | Public post content (titles, text, media URLs, stats) | Processed **in memory** during a run, discarded immediately after | Rendering the Discord message | Only sent to the Discord webhook(s) *you* configured |
 
 No analytics, no tracking, no cookies, no databases, no telemetry, no advertising.
@@ -34,7 +34,9 @@ No analytics, no tracking, no cookies, no databases, no telemetry, no advertisin
 * Discord user information (usernames, IDs, messages of server members) — the Service cannot read
   any of it; webhooks are **one-way, post-only**.
 * X/Twitter or Reddit account credentials — only **public** posts are fetched via public RSS/API
-  endpoints; no login is used or stored.
+  endpoints; no login is used or stored. (The optional Reddit *feed token* is a public-read
+  credential for RSS only — it grants no access to your account, DMs, or profile, and can be
+  regenerated at any time.)
 * IP addresses or device information of anyone.
 * Any payment information.
 
@@ -50,7 +52,8 @@ public URL being looked up):
 |---|---|---|
 | **GitHub Actions** | Hosts and runs the scripts | https://docs.github.com/en/site-policy/privacy-policies |
 | **Discord (webhooks)** | Delivers the generated messages | https://discord.com/privacy |
-| **Nitter mirrors / Redlib** | Public RSS feeds for X/Twitter and Reddit | per-instance |
+| **Nitter mirrors** | Public RSS feeds for X/Twitter | per-instance |
+| **Redlib** | Reddit RSS fallback mirrors only — all current instances are behind anti-bot challenges (verified 2026-09-13), so requests typically fail fast and transfer no content | per-instance |
 | **FxTwitter / FxEmbed API** | Tweet metadata, media, translation | https://fxtwitter.com |
 | **video.twimg.com / x.com (X CDN & post pages)** | HTTP HEAD probes of public video file sizes (X V2/V3 "smart video" check) and OpenGraph image lookups on public post pages — only meta tags are read, no content is downloaded | https://x.com |
 | **gif.fxtwitter.com** | One HEAD probe per X GIF to check the animated WebP rendition exists before using it | https://fxtwitter.com |
@@ -58,7 +61,7 @@ public URL being looked up):
 | **EmbedEZ API** (Reddit V2 only) | Reddit post metadata, media | https://embedez.com |
 | **redditez.com** (Reddit V1 default mirror) | No direct contact: the Service only *constructs* the mirror link from the public post path; **Discord's servers** fetch that URL to render the unfurled embed | https://www.redditez.com |
 | **embeddit.deltandy.me / vxreddit.com** (only if you switch `REDDIT_MIRROR`) | Same as above — link construction only; Discord fetches the mirror when rendering. Both are independent community projects, unaffiliated with this project | https://embeddit.deltandy.me |
-| **reddit.com** | Public subreddit RSS | https://www.reddit.com/policies/privacy-policy |
+| **reddit.com** | Public subreddit RSS — all tracked subreddits in **one combined feed request per run** (`/r/a+b+c/new.rss?limit=100`), optionally carrying your personal feed token (sent only to reddit.com) | https://www.reddit.com/policies/privacy-policy |
 | **cron-job.org** (optional) | External schedule trigger | https://cron-job.org/en/privacy/ |
 
 The Service never sends these third parties anything about your Discord server's members or content —
