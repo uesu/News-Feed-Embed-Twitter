@@ -50,6 +50,10 @@ and to [@isovel](https://github.com/isovel), creator of FxTwitter/FxEmbed — do
     **playable YouTube player** appears next to the reddit embed.
   - **V2** — rich *Components V2* card built from the **EmbedEZ API** (title, media gallery, stats,
     🕐 Discord timestamp).
+- 🧵 **Round 9 (2026-09-13): one combined RSS request** — all tracked subreddits are fetched in a
+  single `/r/sub1+sub2+.../new.rss` feed, which fits inside Reddit's ~1 request/minute datacenter
+  rate limit; automatic per-subreddit fallback if the combined feed ever fails. Optional personal
+  **`REDDIT_FEED_TOKEN`** makes it bulletproof. (See the round-9 section under the Reddit monitor.)
 - 🔘 **Link-style buttons** with emoji support (Unicode **or** custom server emoji IDs). Reddit
   buttons: **Read Post → the original `reddit.com` thread**, **▶️ YouTube** (only when a link is
   detected), **Citlali News**, **Support**.
@@ -85,6 +89,7 @@ and to [@isovel](https://github.com/isovel), creator of FxTwitter/FxEmbed — do
 ├── main_v3.py                   # X/Twitter — V3 (Components V2, buttons INSIDE)
 ├── reddit_main.py               # Reddit — V1 (free, mirror auto-embed: redditez/embeddit/vxreddit)
 ├── reddit_main_v2.py            # Reddit — V2 (Components V2 via EmbedEZ API)
+├── testing area/                # test copies of updated scripts (see Testing Area guide below)
 ├── posted_tweets.json           # X cache (auto-committed) — start with: []
 ├── posted_reddit.json           # Reddit cache (auto-committed) — start with: []
 ├── PRIVACY_POLICY.md            # privacy policy (the bot collects no personal data)
@@ -93,6 +98,33 @@ and to [@isovel](https://github.com/isovel), creator of FxTwitter/FxEmbed — do
 ├── .env.example                 # local testing template
 └── .gitignore                   # (keep the posted_*.json force-add exception in workflow)
 ```
+
+---
+
+## 🧪 Testing area — how updates are tested before going live
+
+Every new or changed script is proven **before** it touches production. The process:
+
+1. **The updated script lives in the `testing area/` folder first** (e.g. `testing area/reddit_maintest.py`,
+   `testing area/main_v3test.py`). Never run an unproven script from the repo root.
+2. **Point the workflow's `run:` line at the test copy.** The **double quotes are required** because
+   the folder name contains a space:
+   ```yaml
+   run: python "testing area/reddit_maintest.py"
+   ```
+3. **Check two things:**
+   - the actual post(s) in Discord (layout, buttons, media), **and**
+   - the workflow log (Actions tab) — every skipped source/instance is logged there.
+4. **Once both look right, copy the test file over the production file**
+   (`reddit_main.py`, `reddit_main_v2.py`, `main.py`, `main_v2.py`, `main_v3.py`) and point the
+   `run:` line back at it:
+   ```yaml
+   run: python reddit_main.py
+   ```
+5. Commit. Production is updated; the test file can stay or be deleted.
+
+> The same guidance is written as a comment block inside both workflow yml files, right above the
+> `run:` line, so future readers find it there too.
 
 ---
 
@@ -272,6 +304,10 @@ jobs:
           WEBHOOK_POMPOM_HONKAISR: ${{ secrets.WEBHOOK_POMPOM_HONKAISR }}
           WEBHOOK_WUTHERING_WAVES: ${{ secrets.WEBHOOK_WUTHERING_WAVES }}
           WEBHOOK_HONKAINA: ${{ secrets.WEBHOOK_HONKAINA }}
+          WEBHOOK_ANANTA_EN: ${{ secrets.WEBHOOK_ANANTA_EN }}
+        # While testing a new version, point this line at the test copy instead
+        # (QUOTES REQUIRED — the folder name has a space):
+        #   run: python "testing area/main_v3test.py"
         run: python main_v3.py   # ← switch to main.py / main_v2.py here
 
       - name: Commit and push updated posted_tweets.json cache
@@ -326,6 +362,7 @@ Discord channel.
 |---|---|
 | `SUBREDDITS` | Comma-separated subreddit names, e.g. `Zenlesszonezeroleaks_,Genshin_Impact_Leaks,HonkaiStarRail_leaks,WutheringWavesLeaks,HonkaiNexusAnimaLeaks,AnantaLeaks` |
 | `WEBHOOK_REDDIT_<SUB>` | One per subreddit's channel (rule: `WEBHOOK_REDDIT_` + UPPERCASE name, non-alphanumerics → `_`). For the default six: `WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_`, `WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS`, `WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS`, `WEBHOOK_REDDIT_WUTHERINGWAVESLEAKS`, `WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS`, `WEBHOOK_REDDIT_ANANTALEAKS` |
+| `REDDIT_FEED_TOKEN` *(optional — **recommended**)* | Your personal Reddit **feed token** (round 9): old.reddit.com → your username → **Preferences** (or `old.reddit.com/prefs/feeds`) → any feed link ends with `?feed=<token>` — copy just the token. Moves RSS requests to the logged-in rate tier, making multi-sub monitoring bulletproof. See the round-9 section below. |
 | `REDDIT_MIRROR` *(optional — set as a repo **Variable**, not a Secret)* | **V1 only.** Embed mirror host: `redditez.com` (default), `embeddit.deltandy.me`, or `vxreddit.com` |
 | `EMBEDEZ_API_KEY` | **V2 only** — from your embedez.com dashboard |
 | `DISCORD_WEBHOOK_URL` *(optional)* | Catch-all fallback |
@@ -366,6 +403,7 @@ jobs:
           SUBREDDITS: ${{ secrets.SUBREDDITS }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           EMBEDEZ_API_KEY: ${{ secrets.EMBEDEZ_API_KEY }}
+          REDDIT_FEED_TOKEN: ${{ secrets.REDDIT_FEED_TOKEN }}   # optional (recommended) — your feed token
           WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_: ${{ secrets.WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_ }}
           WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS: ${{ secrets.WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS }}
           WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS: ${{ secrets.WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS }}
@@ -373,6 +411,9 @@ jobs:
           WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS: ${{ secrets.WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS }}
           WEBHOOK_REDDIT_ANANTALEAKS: ${{ secrets.WEBHOOK_REDDIT_ANANTALEAKS }}
           REDDIT_MIRROR: ${{ vars.REDDIT_MIRROR }}   # optional (V1): blank/omitted = redditez.com
+        # While testing a new version, point this line at the test copy instead
+        # (QUOTES REQUIRED — the folder name has a space):
+        #   run: python "testing area/reddit_maintest.py"
         run: python reddit_main.py   # ← switch to reddit_main_v2.py for the rich card
 
       - name: Commit and push updated posted_reddit.json cache
@@ -383,7 +424,7 @@ jobs:
           git diff --quiet && git diff --staged --quiet || (git commit -m "auto: update posted_reddit.json cache" && git push)
 ```
 
-Create `posted_reddit.json` with `[]` as its initial content (first run posts only the newest thread,
+Create `posted_reddit.json` with `[]` as its initial content (first run posts only the newest item,
 by design).
 
 ## 🆕 Reddit behaviors (2026-09-11 update)
@@ -391,7 +432,7 @@ by design).
 * **Buttons were trimmed.** The Embeddit and vxReddit mirror buttons are **gone** (see concerns §6),
   and *Read Post* now points to the **original `https://www.reddit.com/...` permalink** — not the
   redditez mirror. Mirrors stay credited at the top of this README.
-* **Switching the V1 embed mirror (redditez ⇄ Embeddit ⇄ vxReddit).** By default V1 posts the
+* **Switching the V1 embed mirror (redditez ⇄ Embeddit  vxReddit).** By default V1 posts the
   redditez link (plain reddit links don't unfurl richly via plain webhooks). All three mirrors
   accept the **same** `/r/<sub>/comments/…` path format and were verified live (2026-09-12) to
   serve embed meta to Discordbot, so switching is pure configuration — no code edit:
@@ -416,8 +457,7 @@ by design).
   bumps `updated`). A thread approved "tomorrow" still arrives. If your subs regularly take longer
   than 48h to approve, raise `MAX_AGE_SECONDS` near the top of the script.
 * **Reddit V2 fixes** — all EmbedEZ text fields are now HTML-sanitized (their authorized
-  `content.title` itself contains raw `<a>`/`
-` tags, which previously rendered literally), and
+  `content.title` itself contains raw `<a>`/`<br>` tags, which previously rendered literally), and
   the stats line ends with a 🕐 `<t:…:f>` timestamp (from EmbedEZ `postedDate`, falling back to the
   RSS date).
 
@@ -449,8 +489,7 @@ points before relying on it:
    always-visible duplicate mirror buttons added clutter without value. The mirrors remain fully
    credited at the top of this README.
 7. **HTML is stripped from every text field.** With a valid API key, EmbedEZ's `content.title` itself
-   contains HTML (`Posted in <a …>r/sub</a>
-…`) — earlier builds rendered those tags literally in
+   contains HTML (`Posted in <a …>r/sub</a><br>…`) — earlier builds rendered those tags literally in
    the Discord card. All title/description/text fields (authorized *and* public-preview) are
    sanitized now.
 8. **Components V2 can't auto-unfurl a bare YouTube link** inside a card (the auto-embed player is a
@@ -502,6 +541,47 @@ ever blocks GitHub's datacenter IPs more aggressively, or a Redlib instance dies
 shows exactly which source answered what — just reorder/replace entries in `REDDIT_RSS_INSTANCES`
 (identical list in both Reddit scripts).
 
+### 🆕 2026-09-13 — round 9: one combined RSS request + feed token + verified mirrors
+
+Live testing on 2026-09-13 confirmed how strict Reddit's datacenter rate limiting has become
+(anonymous RSS ≈ **1 request/minute per IP** since June 2026 — a burst of 7 requests 429'd
+entirely; one request 65s later succeeded), and that **every public Redlib/Eddrit mirror is now
+bot-walled** (every official registry instance was probed: Anubis "Verifying your browser…"
+challenges, 418 bot-checks, Cloudflare 403s, 404s, dead SSL). So round 9 does three things:
+
+1. **ONE combined feed request per run (the big fix).** Reddit joins subreddits with `+` in one
+   URL, and it's verified live that this works with the `?limit=100` parameter (default 25, max 100):
+   ```
+   https://www.reddit.com/r/Zenlesszonezeroleaks_+Genshin_Impact_Leaks+HonkaiStarRail_leaks+WutheringWavesLeaks+HonkaiNexusAnimaLeaks+AnantaLeaks/new.rss?limit=100
+   ```
+   → **200, real Atom, ~190 KB, posts from all active subs in a SINGLE request.** One request per
+   run fits inside the ~1/min anonymous limit by itself. Each entry's permalink still names its
+   subreddit, so **per-channel webhook routing is unchanged** (and the existing
+   `posted_reddit.json` dedup keys still match). If the combined feed ever fails, the script
+   **automatically falls back** to the old per-subreddit fetches (instance rotation + retries).
+2. **`REDDIT_FEED_TOKEN` (repo secret — recommended, optional).** Your personal feed token:
+   1. Log in at **old.reddit.com** → click your username → **Preferences** (or open
+      `https://old.reddit.com/prefs/feeds`).
+   2. Any feed link on that page ends with `?feed=<token>` — copy just the token value.
+   3. Add it as the secret **`REDDIT_FEED_TOKEN`** (Settings → Secrets and variables → Actions).
+      The script appends `&feed=<token>` to native reddit.com requests, moving them to the
+      logged-in rate tier — 429s should then essentially stop. (Don't paste the token in chat;
+      treat it like a password.)
+3. **Fallback mode hardened.** Per-subreddit fallback now retries 429s **twice** (after 6s *and*
+   after 45s — the 45s wait rides out the ~1-minute anonymous window refill), and the fallback
+   instance list was trimmed to the 5 sources that at least respond
+   (`www.reddit.com`, `old.reddit.com`, `safereddit.com`, `red.artemislena.eu`,
+   `redlib.privacyredirect.com`). The dead/404/418 instances were dropped; all remaining Redlib
+   entries are verified-behind-bot-check "lottery tickets" only. Refresh candidates anytime at
+   [redlib-instances](https://github.com/redlib-org/redlib-instances).
+
+**Expected Actions log (round 9, with token):** `Fetching combined feed for 6 subreddits in 1
+request...` → `Combined feed OK: NN entries covering N subreddit(s).` → posts per channel.
+
+**X side: no changes.** The `RSS_INSTANCES` Nitter list in all `main*.py` files was retested
+2026-09-13 and intentionally left exactly as the original repo's (`nitter.perennialte.ch` has the
+best GitHub-runner track record; the rest are fallbacks).
+
 ---
 
 # 🛠 Full Setup Guide
@@ -527,7 +607,11 @@ For each target channel: *Channel Settings → Integrations → Webhooks → New
 *Repo → Settings → Secrets and variables → Actions → New repository secret*, then add the ones you
 need from the X and Reddit tables above (`ACCOUNTS`, `WEBHOOK_<ACCOUNT>` per account, `SUBREDDITS`,
 `WEBHOOK_REDDIT_<SUB>` per subreddit, `EMBEDEZ_API_KEY` only if using Reddit V2, optional
-`DISCORD_WEBHOOK_URL` fallback).
+`DISCORD_WEBHOOK_URL` fallback, and **recommended** `REDDIT_FEED_TOKEN` — see the round-9 section
+for the 2-minute how-to).
+
+Then, if you use the V1 embed mirror switch, create the repo **Variable** `REDDIT_MIRROR`
+(Variables tab, not Secrets).
 
 ## Step 3 — Reset the caches for a fresh start
 
@@ -570,6 +654,9 @@ Keep the in-file `schedule:` cron as a harmless backup — occasional extra *Sch
 *Actions → select the workflow → Run workflow*, then check: the right Discord channels got the right
 posts, buttons render, and the cache file shows a new `github-actions[bot]` commit.
 
+For any **new or updated script**, test it from the `testing area/` folder first — see the
+[Testing area guide](#-testing-area--how-updates-are-tested-before-going-live) above.
+
 ## (Optional) Render Cron instead of GitHub Actions
 
 Create a **Cron Job** on Render: build `pip install -r requirements.txt`, command
@@ -603,10 +690,14 @@ WEBHOOK_REDDIT_HONKAINEXUSANIMALEAKS=https://discord.com/api/webhooks/...
 WEBHOOK_REDDIT_ANANTALEAKS=https://discord.com/api/webhooks/...
 REDDIT_MIRROR=redditez.com   # optional, V1 only: embeddit.deltandy.me | vxreddit.com
 EMBEDEZ_API_KEY=ez_...       # Reddit V2 only
+REDDIT_FEED_TOKEN=           # optional (recommended) — old.reddit.com/prefs/feeds, the ?feed= value
 ```
 
 Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py` /
 `python reddit_main.py` / `python reddit_main_v2.py`.
+
+> When a script sits in `testing area/`, quote the path (the space):
+> `python "testing area/reddit_maintest.py"`.
 
 ---
 
@@ -618,10 +709,12 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 * **`Could not fetch valid RSS feed for @…` / `r/…`** — public mirrors rotate/die. For X, swap
   `RSS_INSTANCES` with currently-live Nitter mirrors; for Reddit, see the *Reddit V1 fix* section and
   read the new per-source log lines.
-* **`HTTP 429 for r/…` lines in a Reddit run** — Reddit rate-limiting datacenter bursts; the script
-  retries once and staggers the fetches, so a 429 in the log is usually self-resolving. If a
-  subreddit still ends up "from any instance", the post is **not** lost — the 48h window catches it
-  on a later run.
+* **`HTTP 429 for r/…` lines in a Reddit run** — Reddit's anonymous datacenter rate limit
+  (~1 request/minute per IP since June 2026). Round 9 makes the primary fetch a **single combined
+  request** for all subreddits, which normally fits the limit; in fallback mode the script retries
+  twice (6s, then 45s) before moving on. A subreddit that still ends up "from any instance" loses
+  nothing — the 48h window catches it on a later run. **The permanent fix is the
+  `REDDIT_FEED_TOKEN` secret** (round-9 section above) — with it, 429s should essentially stop.
 * **`ValueError: invalid literal for int() with base 16: 'None'`** — old V3 bug when FxTwitter returns
   `"color": null`; fixed via the `accent_from_color()` helper with a safe Twitter-blue default.
 * **`Deprecation` / `Node.js 20 is deprecated` warnings in Actions logs** — cosmetic, safe to ignore
@@ -653,6 +746,9 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   videos through FxTwitter's embed proxy instead.
 * **EmbedEZ suddenly errors after an update** — expected risk (their docs warn of breaking changes);
   the Actions log prints the raw API response to help adjust field names.
+* **Combined feed returns "no RSS entries" / `429`** — Reddit's "loading takes a moment" HTML page or
+  rate limit. The script rejects non-feed HTML automatically and falls back to per-subreddit fetches;
+  adding `REDDIT_FEED_TOKEN` removes the rate-limit cause entirely.
 
 ---
 
@@ -670,6 +766,18 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 ## 🗒 Changelog
 
+* **2026-09-13 — round 9:**
+  * **Reddit reliability (live-verified):** primary fetch is now **ONE combined feed request**
+    (`/r/sub1+sub2+.../new.rss?limit=100`) covering all subreddits — fits Reddit's
+    ~1 req/min anonymous datacenter limit; automatic per-subreddit fallback kept. `?limit=100`
+    verified (default 25, max 100).
+  * **New `REDDIT_FEED_TOKEN` secret** (optional, recommended): personal feed token
+    (old.reddit.com → Preferences → Feeds) appended as `?feed=…` → logged-in rate tier.
+  * **Fallback mode:** two 429 retries (6s + 45s) instead of one; instance list trimmed to 5
+    responding sources after live-probing **every** official Redlib registry instance + eddrit —
+    all behind Anubis/Cloudflare/gammaspectra bot challenges or dead (fallback lottery only).
+  * **Docs:** new Testing Area guide (quotes required for `testing area/` paths) + guidance comments
+    inside both workflow ymls; X `RSS_INSTANCES` retested and intentionally unchanged.
 * **2026-09-12 — round 8:**
   * **Reddit RSS sources fixed for multi-sub monitoring.** `redlib.perennialte.ch` removed (shut
     down 2026-08-31, now answers HTTP 410); fresh Redlib fallback chain from the official
@@ -739,6 +847,5 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   (`search` → `preview`) with graceful public-preview fallback.
 * **Earlier:** X V1/V2/V3 engines, multi-webhook routing, `/en` auto-translation, external
   cron-job.org scheduling guide.
-
 
 ---
