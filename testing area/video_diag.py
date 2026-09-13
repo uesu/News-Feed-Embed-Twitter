@@ -209,7 +209,10 @@ async def run(webhook_url: str, tweet_ids: list) -> None:
 
             payload = build_card(screen_name, tid, items, summary_lines)
             log.info("Posting diagnostic card for %s (%d tiles) ...", screen_name, len(items))
-            async with session.post(webhook_url, json=payload,
+            # Components V2 requires the with_components=true query parameter
+            # (same as main_v2.py / main_v3.py in production).
+            target_url = f"{webhook_url}?with_components=true"
+            async with session.post(target_url, json=payload,
                                     timeout=aiohttp.ClientTimeout(total=30)) as r:
                 if r.status in (200, 204):
                     log.info("Posted tweet %s diagnostic OK.", tid)
