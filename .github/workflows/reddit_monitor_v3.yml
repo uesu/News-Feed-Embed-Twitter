@@ -1,4 +1,4 @@
-name: Reddit Feed Monitor
+name: Reddit Feed V3 Monitor
 
 on:
   schedule:
@@ -26,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Reddit Feed Monitor
+      - name: Run Reddit V3 Feed Monitor
         env:
           SUBREDDITS: ${{ secrets.SUBREDDITS }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
