@@ -129,6 +129,71 @@ check("redlib: gif kind", g[3] == {"kind": "gif", "url": "https://i.redd.it/444d
 check("redlib: empty page -> []", v3.extract_redlib_gallery("") == [])
 check("redlib: bot-challenge page -> []", v3.extract_redlib_gallery("<html><h1>Please verify</h1></html>") == [])
 
+# ---- 4d. test-post post-RSS source (round 12e) ----------------------------
+import asyncio
+
+
+class _FakeEntry:
+    def __init__(self, link, title, author, content_value):
+        self.link = link
+        self.title = title
+        self.author = author
+        self._d = {"content": [{"value": content_value}], "summary": "",
+                   "media_thumbnail": []}
+
+    def get(self, k, d=None):
+        return self._d.get(k, d)
+
+
+def _post_rss_feed():
+    post = _FakeEntry("/r/AnantaLeaks/comments/1wguffh/heist_mode/", "Heist mode",
+                      "hugosince1999", "<p>1 hour long, 2-4 players</p>")
+    comment = _FakeEntry("/r/AnantaLeaks/comments/1wguffh/heist_mode/comment/zzz/",
+                         "a comment", "somebody", "<p>comment body</p>")
+    return types.SimpleNamespace(entries=[post, comment])
+
+
+orig_combined = v3.fetch_combined_feed
+orig_post_rss = v3._fetch_post_rss
+orig_fetch_feed = v3._fetch_feed
+
+# 4d.1 URL construction (real _fetch_post_rss, fake _fetch_feed)
+captured = []
+
+
+async def _fetch_feed_fake(session, url, label):
+    captured.append(url)
+    return None
+
+
+v3._fetch_feed = _fetch_feed_fake
+asyncio.run(v3._fetch_post_rss(None, "/r/AnantaLeaks/comments/1wgq3cy/"))
+v3._fetch_feed = orig_fetch_feed
+check("post-rss: url = instance + permalink + .rss",
+      bool(captured) and captured[0].startswith(
+          "https://www.reddit.com/r/AnantaLeaks/comments/1wgq3cy/.rss"), str(captured[:1]))
+check("post-rss: falls through every instance when all fail",
+      len(captured) == len(v3.REDDIT_RSS_INSTANCES), str(len(captured)))
+
+# 4d.2 end-to-end base from the post entry (fake feeds, no network)
+async def _combined_none(session):
+    return None
+
+
+async def _post_rss_fake(session, path):
+    return _post_rss_feed()
+
+
+v3.fetch_combined_feed = _combined_none
+v3._fetch_post_rss = _post_rss_fake
+b2 = asyncio.run(v3.fetch_test_post_base(None, "/r/AnantaLeaks/comments/1wguffh/", "tp"))
+check("tp-12e: base built from the post entry (not the comment)",
+      b2 and b2["title"] == "Heist mode" and b2["author"] == "hugosince1999", str(b2))
+check("tp-12e: body cleaned from post content",
+      b2 and b2["body"] == "1 hour long, 2-4 players", str(b2 and b2.get("body")))
+v3.fetch_combined_feed = orig_combined
+v3._fetch_post_rss = orig_post_rss
+
 # ---- 5. OP comment selection + card line ----------------------------------
 pj = {"author": "OP", "permalink": "/r/Sub/comments/abc/title/"}
 pj["_top_comments"] = [
