@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # allows manual + external-cron triggering
     inputs:
       test_post:
-        description: 'Optional TEST POST: rebuild ONE specific post, e.g. AnantaLeaks/1wgvcz7 (needs FULL MODE / post JSON to work). Leave empty for a normal run.'
+                description: 'Optional TEST POST: rebuild ONE specific post, e.g. AnantaLeaks/1wgvcz7 (native RSS/redlib fallback if the post JSON 403s). Leave empty for a normal run.'
         required: false
         default: ''
       dry_run:
