@@ -85,23 +85,41 @@ and to [@dangered wolf](https://github.com/dangeredwolf), creator and lead devel
 
 ```
 ├── .github/
+│   ├── dependabot.yml             # Dependabot: weekly pip + actions update PRs (optional)
 │   └── workflows/
-│       ├── twitter_monitor.yml      # X/Twitter monitor (choose V1/V2/V3 inside)
-│       └── reddit_monitor.yml   # Reddit monitor (choose V1/V2 inside)
-├── main.py                      # X/Twitter — V1 (classic content + fxtwitter embed)
-├── main_v2.py                   # X/Twitter — V2 (Components V2, buttons OUTSIDE)
-├── main_v3.py                   # X/Twitter — V3 (Components V2, buttons INSIDE)
-├── reddit_main.py               # Reddit — V1 (free, mirror auto-embed: redditez/embeddit/vxreddit)
-├── reddit_main_v2.py            # Reddit — V2 (Components V2 via EmbedEZ API)
-├── testing area/                # test copies of updated scripts (see Testing Area guide below)
-├── posted_tweets.json           # X cache (auto-committed) — start with: []
-├── posted_reddit.json           # Reddit cache (auto-committed) — start with: []
-├── PRIVACY_POLICY.md            # privacy policy (the bot collects no personal data)
-├── TERMS_OF_SERVICE.md          # terms of service / acceptable use
-├── requirements.txt             # feedparser, aiohttp, python-dotenv
-├── .env.example                 # local testing template
-└── .gitignore                   # (keep the posted_*.json force-add exception in workflow)
+│       ├── twitter_monitor.yml    # X/Twitter — runs testing area/main_v3testproround10.py (V3)
+│       ├── reddit_monitor.yml     # ⚠️ OLD Reddit V1/V2 workflow — ARCHIVE it (Actions tab),
+│       │                          #    see "Testing & verification" — superseded by V3
+│       ├── reddit_monitor_v3.yml  # Reddit V3 (ACTIVE) — runs testing area/reddit_main_v3test.py
+│       ├── ci.yml                 # PR gate: install + compile + offline smoke test
+│       └── dependabot_auto_merge.yml  # opt-in auto-merge for Dependabot PRs (repo Variable)
+├── docs/
+│   └── DEPENDABOT.md              # full plain-English Dependabot explanation
+├── main.py                        # X/Twitter — V1 (production copy)
+├── testing area/                  # tested copies of every engine (see Testing area guide)
+│   ├── main_v2testpro.py / main_v2testproround10.py      # X V2 (buttons outside)
+│   ├── main_v3testpro.py / main_v3testproround10.py      # X V3 (buttons inside — ACTIVE)
+│   ├── reddit_maintest.py         # Reddit V1 (free, mirror auto-embed)
+│   ├── reddit_main_v2test.py      # Reddit V2 (Components V2 via EmbedEZ API)
+│   ├── reddit_main_v3test.py      # Reddit V3 (native media, no key — ACTIVE)
+│   └── video_diag.py              # X video tile diagnostic (round 10)
+├── tests/
+│   └── test_smoke.py              # offline smoke test (run by ci.yml on every PR)
+├── posted_tweets.json             # X cache (auto-committed) — start with: []
+├── posted_reddit.json             # Reddit cache (auto-committed) — start with: []
+├── PRIVACY_POLICY.md              # privacy policy (the bot collects no personal data)
+├── TERMS_OF_SERVICE.md            # terms of service / acceptable use
+├── requirements.txt               # feedparser, aiohttp, python-dotenv
+├── .env.example                   # local testing template
+└── .gitignore                     # (keep the posted_*.json force-add exception in workflow)
 ```
+
+> **Promotion note:** the production root copies of the X V2/V3 and Reddit V1/V2/V3
+> engines do not exist yet — by design, everything runs from `testing area/` first.
+> When a test copy passes, copy it to the root (`main_v2.py`, `main_v3.py`,
+> `reddit_main.py`, `reddit_main_v2.py`, `reddit_main_v3.py`) and point the
+> workflow's `run:` line at the copy (the V3 promotion steps are in the testing
+> guide below).
 
 ---
 
@@ -453,14 +471,79 @@ Discord channel.
 * **Test tools (verify before promoting).** In the V3 workflow
   (`workflow_dispatch`):
   * **`test_post`** input = `<subreddit>/<post_id>` (e.g. `AnantaLeaks/1wgvcz7`)
-    rebuilds exactly that post (bypasses feed + dedup; needs the post JSON
-    path to work — i.e. FULL MODE);
+    rebuilds exactly that post (bypasses feed + dedup). Data source: the post
+    JSON when reachable (FULL MODE); otherwise the post's RSS feed entry
+    (100-entry window) or a redlib post page (round 12c — works in native
+    mode too).
   * **`dry_run: yes`** builds + logs the full payloads **without** posting to
     Discord or saving the cache. Use both together to re-test the exact posts
     that were wrong without spammng the channel.
 * **Environment switches** (all optional — sane defaults without them):
   `YOUTUBE_MEDIA_EMBED` (default off), `REDDIT_OP_COMMENT` (default on),
   `DISCOHOOK_PREVIEW` (default on), `FEEDTOKEN_JSON_STAGGER` (default 65 s).
+
+### 🧪 Reddit V3 — final testing & verification procedure (round 12)
+
+**Step 0 — one-time: archive the OLD Reddit V1/V2 workflow.**
+In the **Actions** tab, open the workflow named **"Reddit Feed Monitor"**
+(the old V1 one, `reddit_monitor.yml`) → its three-dot menu →
+**Archive workflow**. It targets the same test channels and the same
+`posted_reddit.json` dedup cache as V3, so every time GitHub's native cron
+fires it, it would post the same new post in the OLD plain style and
+"steal" it from V3. (Your external cron-job.org trigger should point at
+**"Reddit Feed V3 Monitor"** — the V3 one — not this one.)
+
+Everything is triggered from the repo's **Actions** tab → workflow
+**"Reddit Feed V3 Monitor"** → the **Run workflow** button (branch `main`).
+
+**Step 1 — Dry run (safety check; nothing is posted)**
+
+1. Set `dry_run` = **yes**, leave `test_post` **empty** → **Run workflow**.
+2. Wait 1–3 minutes and open the run log. It lists every post it *would*
+   post, each with its complete card payload. **Discord is NOT touched and
+   the cache is NOT saved — that is the whole point of the dry run**
+   (a "DRY RUN finished" run intentionally sends nothing).
+3. Key lines to see: `Combined feed OK: …`, per post `post JSON …`
+   (full or native mode), `video url OK via …` / `gallery via redlib (…)`,
+   and `DRY RUN (Discord NOT touched): …` per post.
+4. The post the dry run listed will be posted by the **next normal cron run**
+   (the dry run doesn't mark it as posted).
+
+**Step 2 — Test posts (re-post specific old posts into the test channel)**
+
+Run the workflow with `dry_run` = **no** and `test_post` =
+`<Subreddit>/<post_id>` (one at a time), e.g.:
+
+| `test_post` value | Post type | What to expect in the channel |
+|---|---|---|
+| `AnantaLeaks/1wguffh` | 3-photo gallery | **all 3 photos**, full-res, never one 140px thumb |
+| `AnantaLeaks/1wgq3cy` | YouTube link post | **video only** + the animated YouTube button — no screenshot |
+| `HonkaiStarRail_leaks/1wguwvw` | Reddit video | **video tile only** — no duplicate first-frame image |
+
+The log tells you the data source: `post JSON OK via …` (FULL MODE) or
+`test post found in the RSS feed` / `test post base via redlib (…)`.
+
+**Step 3 — Normal runs (the real verification)**
+
+Do nothing — the scheduled runs post new posts with the new card. In the test
+channel check:
+
+* multi-photo posts → **all** photos (never a single 140px thumbnail)
+* video posts → **video tile only** (no duplicate screenshot)
+* no raw `redd.it` URLs lingering in the body text
+* log: **no** `seaof.glass` lines at all (off by default); if you ever see
+  `video url OK via native v.redd.it DASH_720 (…)`, play that video and
+  confirm it has **audio** (if it plays silent, report it — the ladder is
+  dropped with a one-line change)
+
+**Step 4 — Promotion (only after the test channel looks right)**
+
+1. Copy `testing area/reddit_main_v3test.py` to the repo root as
+   `reddit_main_v3.py`.
+2. In `.github/workflows/reddit_monitor_v3.yml`, change the run line to
+   `python "reddit_main_v3.py"`.
+3. Commit. V1/V2 files stay untouched (the promotion path is documented in
+   the yml comments).
 
 ### Secrets
 
