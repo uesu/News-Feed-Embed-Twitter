@@ -414,9 +414,14 @@ Discord channel.
 
 ### 🆕 Reddit V3 — what's different (round 12, 2026-09-15)
 
-* **All photos, always.** Multi-image posts post every photo (round-12 fix:
-  the native mode now extracts all `redd.it` media from the RSS content in
-  post order instead of only the feed's single 140px thumbnail). Renditions:
+* **All photos, always.** Multi-image posts post every photo.
+  Single-image posts: the RSS content is scanned for every `redd.it` media
+  URL in post order (instead of only the feed's single 140px thumbnail).
+  Multi-image GALLERY posts (whose RSS content carries **no** image links —
+  verified in the 2026-09-15 workflow log) get a best-effort post-page
+  harvest from the redlib fallback instances, probed in parallel (~10s worst
+  case; if every instance fails, the single-thumbnail card is kept —
+  FULL MODE with an OAuth app is the definitive gallery source). Renditions:
   `i.redd.it` full-res swap for jpg/jpeg, largest signed preview URL for
   PNGs — the 140px feed thumb is no longer used.
 * **Clean body text.** Stray `redd.it` image URLs that used to linger in the
@@ -929,8 +934,13 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 * **2026-09-15 — round 12 (Reddit V3 polish, from live test-channel review):**
   * **All photos now post (native mode):** the RSS content is scanned for
-    every `redd.it` media URL in post order; multi-image posts no longer
-    show only the first thumbnail. (FULL MODE already had all photos.)
+    every `redd.it` media URL in post order; single-image posts no longer
+    show only the 140px thumbnail. (FULL MODE already had all photos.)
+  * **Gallery posts (native mode):** multi-image posts carry no image links
+    in the RSS content (verified in the live 2026-09-15 workflow log), so
+    the post page is now harvested from the redlib fallback instances in
+    parallel — same lottery as the feed, ~10s worst case, thumbnail kept on
+    failure.
   * **Best rendition per photo:** `i.redd.it` full-res swap for jpg/jpeg
     (slug-prefixed preview names reduced to the bare file id) or the largest
     signed preview URL — the 140px feed thumbnail is no longer used.

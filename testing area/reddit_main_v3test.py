@@ -56,9 +56,13 @@
 #   5 buttons per row, 4000 chars total text. → 20 photos = 2 containers × 10.
 #
 # ■ ROUND 12 FIXES (2026-09-15, from the live test-channel review):
-#   1. Multi-photo posts now show ALL photos (native mode extracts every
-#      redd.it image from the RSS content in post order; FULL mode had all
-#      already).
+#   1. Multi-photo posts now show ALL photos: single-image posts get every
+#      redd.it image from the RSS content in post order; multi-image GALLERY
+#      posts (whose RSS content carries no image links — verified in the
+#      2026-09-15 workflow log) get a best-effort REDLIB post-page harvest
+#      (same instances as the feed fallback, probed in parallel, ~10s worst
+#      case; on failure the single-thumbnail card is kept). FULL MODE had
+#      all already.
 #   2. Photos use the BEST rendition: i.redd.it full-res swap (jpg/jpeg) or
 #      the largest signed preview URL — never the 140px feed thumbnail.
 #   3. Stray redd.it image URLs no longer linger in the body text.
@@ -745,7 +749,16 @@ def extract_native_media(content_html: str | None) -> list[dict]:
         if prev is None or score > prev[0]:
             best[key] = (score, order, kind, url)
     items = sorted(best.values(), key=lambda t: t[1])
-    return [{"kind": k, "url": u} for _, _, k, u in items]
+    out = []
+    for _, _, kind, u in items:
+        if kind == "image":
+            # Signed preview jpg/jpeg -> unsigned full-res i.redd.it
+            # (verified 2026-09-15; PNGs are never swapped — i.redd.it 404s).
+            swapped = i_reddit_swap(u)
+            if swapped:
+                u = swapped
+        out.append({"kind": kind, "url": u})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -792,6 +805,76 @@ def op_comment_text(op: dict) -> str:
         cut = t
     label = "💬 OP comment" + (" (stickied)" if op.get("stickied") else "")
     return f"**{label}:** {cut} — [full comment]({op['permalink']})"
+
+
+# ---------------------------------------------------------------------------
+# ■ REDLIB GALLERY ENRICHMENT (round 12, best-effort, NATIVE MODE)
+# ---------------------------------------------------------------------------
+# Reddit RSS does NOT expose gallery images for multi-image posts (they live
+# in the post JSON's media_metadata, which is 403-walled from datacenters —
+# verified in the 2026-09-15 workflow log: "post JSON HTTP 403 — native
+# mode"). Single-image posts DO carry their image link in the RSS content.
+# Redlib post pages render the full gallery, so as a fallback lottery (the
+# SAME instances as the feed fallback) we fetch the post page and harvest
+# every redd.it media URL in the post area. All instances are probed in
+# parallel; first success wins; if none answer, the single-thumbnail card
+# is kept (no error, no retry).
+
+REDDIL_POST_TITLE_RE = re.compile(r"<h1[^>]*post_title[^>]*>", re.I)
+
+
+def extract_redlib_gallery(page_html: str | None) -> list[dict]:
+    """
+    Harvest redd.it media from a redlib post page. Scans only the post area
+    (post title -> first comment) to avoid sidebar/related thumbnails, then
+    applies the same dedupe/best-rendition rules as extract_native_media.
+    """
+    if not page_html:
+        return []
+    m = REDDIL_POST_TITLE_RE.search(page_html)
+    if m:
+        page_html = page_html[m.end():]
+    for marker in ('id="comment-', 'class="comment"', '<section class="comments"'):
+        idx = page_html.lower().find(marker.lower())
+        if idx != -1:
+            page_html = page_html[:idx]
+            break
+    return extract_native_media(page_html)
+
+
+async def _fetch_redlib_post_page(session: aiohttp.ClientSession, instance: str,
+                                  path: str, timeout: int = 10) -> str | None:
+    try:
+        async with session.get(f"{instance}{path}", headers=BROWSER_HEADERS,
+                               timeout=aiohttp.ClientTimeout(total=timeout),
+                               allow_redirects=True) as resp:
+            if resp.status == 200 and "html" in (resp.headers.get("Content-Type") or "").lower():
+                return await resp.text()
+    except Exception:
+        pass
+    return None
+
+
+async def enrich_gallery_redlib(session: aiohttp.ClientSession, path: str,
+                                label: str) -> list[dict]:
+    """
+    Parallel best-effort redlib gallery harvest. Returns [] when no instance
+    answers (caller keeps the single-thumbnail fallback).
+    """
+    pages = await asyncio.gather(
+        *[_fetch_redlib_post_page(session, inst, path) for inst in REDDIT_RSS_INSTANCES]
+    )
+    for instance, html in zip(REDDIT_RSS_INSTANCES, pages):
+        if not html:
+            continue
+        items = extract_redlib_gallery(html)
+        if items:
+            logging.info(f"[{label}] gallery via redlib ({instance}) — "
+                         f"{len(items)} media item(s).")
+            return items
+    logging.info(f"[{label}] redlib gallery enrichment failed (all instances) — "
+                 f"single thumbnail kept.")
+    return []
 
 
 async def resolve_youtube_media(session: aiohttp.ClientSession, vid: str, is_live: bool):
@@ -871,7 +954,8 @@ def entry_to_base_data(entry) -> dict:
 
 
 async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
-                             post_json: dict | None) -> dict:
+                             post_json: dict | None,
+                             path: str | None = None, label: str = "") -> dict:
     """
     Builds the final media list + meta for one post.
     media = [{"kind": "image"|"gif"|"video", "url": ...}, ...]
@@ -1021,6 +1105,11 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                                 p["url"] = swap
                                 logging.info(f"photo via i.redd.it full-res swap ({swap}).")
                     media.append(p)
+            if not media and path:
+                # Multi-image GALLERY posts: the RSS content carries no image
+                # links (single-image posts do) — best-effort redlib harvest
+                # of the post page (parallel, ~10s worst case, no retry).
+                media = await enrich_gallery_redlib(session, path, label or "gallery")
             if not media and base.get("thumb"):
                 # legacy fallback: the feed's single thumbnail
                 thumb = base["thumb"]
@@ -1333,7 +1422,8 @@ async def main():
                 }
 
             try:
-                data = await resolve_post_media(session, base, post_json)
+                data = await resolve_post_media(session, base, post_json,
+                                                path=path, label=unique_key)
                 posted_ts = int(max(published_ts, activity_ts))
                 payload = build_v3_payload(subreddit, data, reddit_url, posted_ts)
 

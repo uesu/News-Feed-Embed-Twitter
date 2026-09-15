@@ -90,7 +90,8 @@ content = (
 items = v3.extract_native_media(content)
 check("media: 4 distinct items (deduped)", len(items) == 4, str(items))
 check("media: photo1 full-res swap", items[0] == {"kind": "image", "url": "https://i.redd.it/aaaa1111bbbb.jpg"}, str(items[0]))
-check("media: photo2 signed kept", "cccc2222dddd" in items[1]["url"] and "width=1080" in items[1]["url"], str(items[1]))
+check("media: photo2 (signed jpg only) swapped to i.redd.it",
+      items[1] == {"kind": "image", "url": "https://i.redd.it/cccc2222dddd.jpg"}, str(items[1]))
 check("media: gif kind", items[2] == {"kind": "gif", "url": "https://i.redd.it/eeee3333ffff.gif"}, str(items[2]))
 check("media: external-preview kept for caller", "external-preview" in items[3]["url"], str(items[3]))
 
@@ -101,6 +102,32 @@ check("swap: slug -> bare id", v3.i_reddit_swap(
     "https://preview.redd.it/heist-mode-v0-8la7js0h9nph1.jpg?width=1080&s=x")
     == "https://i.redd.it/8la7js0h9nph1.jpg")
 check("swap: png not swapped", v3.i_reddit_swap("https://preview.redd.it/xyz.png?width=1280&s=x") is None)
+
+# ---- 4b. redlib gallery scoping ---------------------------------------------
+redlib_page = """
+<html><head><style>.post_title{font-size:20px}</style></head><body>
+<header><img src="https://i.redd.it/subicon.jpg"></header>
+<h1 class="post_title"><a href="/r/X/comments/abc/t/">Title</a></h1>
+<div class="post_content">
+  <img src="https://preview.redd.it/photo-a-v0-111aaa1.jpg?width=140&crop=1:1,smart&auto=webp&s=x">
+  <img src="https://i.redd.it/222bbb2.jpg">
+  <img src="https://preview.redd.it/photo-b-v0-333ccc3.jpg?width=1080&crop=smart&auto=webp&s=y">
+  <img src="https://i.redd.it/444ddd4.gif">
+</div>
+<div id="comment-9"><img src="https://i.redd.it/commentside.jpg"></div>
+<div class="sidebar"><img src="https://i.redd.it/sidebar.jpg"></div>
+</body></html>
+"""
+g = v3.extract_redlib_gallery(redlib_page)
+check("redlib: 4 items (sub icon + comment/sidebar imgs excluded)", len(g) == 4, str(g))
+check("redlib: photo-a deduped to full-res", g[0] == {"kind": "image", "url": "https://i.redd.it/111aaa1.jpg"}, str(g[0]))
+check("redlib: order kept (signed jpg/jpeg swapped to i.redd.it)",
+      [x["url"] for x in g][:3]
+      == ["https://i.redd.it/111aaa1.jpg", "https://i.redd.it/222bbb2.jpg",
+          "https://i.redd.it/333ccc3.jpg"], str(g))
+check("redlib: gif kind", g[3] == {"kind": "gif", "url": "https://i.redd.it/444ddd4.gif"}, str(g[3]))
+check("redlib: empty page -> []", v3.extract_redlib_gallery("") == [])
+check("redlib: bot-challenge page -> []", v3.extract_redlib_gallery("<html><h1>Please verify</h1></html>") == [])
 
 # ---- 5. OP comment selection + card line ----------------------------------
 pj = {"author": "OP", "permalink": "/r/Sub/comments/abc/title/"}
