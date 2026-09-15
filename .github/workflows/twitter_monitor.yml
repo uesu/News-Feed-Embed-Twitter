@@ -26,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run RSS Feed Monitor
+      - name: Run Twitter Feed Monitor
         env:
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
