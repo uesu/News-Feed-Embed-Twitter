@@ -1,0 +1,16 @@
+# Dependabot — automatic dependency updates (repo Settings > Code security and
+# analysis > Dependabot alerts & security updates must be ON for security PRs;
+# version updates below work regardless).
+#
+# Weekly check for the three pip dependencies (feedparser, aiohttp,
+# python-dotenv). Each update opens a PULL REQUEST — you merge it when the
+# next test-area run looks good (the Actions job reinstalls deps every run,
+# so a merged PR changes behavior on the next trigger).
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
