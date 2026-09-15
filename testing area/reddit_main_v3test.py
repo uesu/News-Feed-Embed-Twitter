@@ -234,8 +234,8 @@ STATIC_BUTTONS = [
 # ---------------------------------------------------------------------------
 # watch / shorts / youtu.be / live (live = no mp4 possible -> thumb+button)
 YOUTUBE_RE = re.compile(
-    r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?[^\\"'<>)\]\s]*v=|shorts/|live/)[^\\"'<>)\]\s]*"
-    r"|youtu\.be/[^\\"'<>)\]\s]+)",
+    r"""https?://(?:www\.)?(?:youtube\.com/(?:watch\?[^"'<>)\]\s]*v=|shorts/|live/)[^"'<>)\]\s]*"""
+    r"""|youtu\.be/[^"'<>)\]\s]+)""",
     re.IGNORECASE,
 )
 YOUTUBE_ID_RE = re.compile(r"(?:v=|youtu\.be/|shorts/|live/)([A-Za-z0-9_-]{11})")
@@ -714,8 +714,8 @@ def _is_external_preview(url: str | None) -> bool:
 # ■ NATIVE MODE MEDIA EXTRACTION (round 12)
 # ---------------------------------------------------------------------------
 REDDIT_MEDIA_URL_RE = re.compile(
-    r"https?://(?:i\.redd\.it|preview\.redd\.it|external-preview\.redd\.it)"
-    r"/[\w.-]+\.(?:jpe?g|png|gif|webp)(?:\?[^\\"'<>\s]*)?",
+    r"""https?://(?:i\.redd\.it|preview\.redd\.it|external-preview\.redd\.it)"""
+    r"""/[\w.-]+\.(?:jpe?g|png|gif|webp)(?:\?[^"'<>\s]*)?""",
     re.I,
 )
 
