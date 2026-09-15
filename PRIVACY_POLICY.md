@@ -53,7 +53,7 @@ public URL being looked up):
 | **GitHub Actions** | Hosts and runs the scripts | https://docs.github.com/en/site-policy/privacy-policies |
 | **Discord (webhooks)** | Delivers the generated messages | https://discord.com/privacy |
 | **Nitter mirrors** | Public RSS feeds for X/Twitter | per-instance |
-| **Redlib** | Reddit RSS fallback mirrors only — all current instances are behind anti-bot challenges (verified 2026-09-13), so requests typically fail fast and transfer no content | per-instance |
+| **Redlib** | Reddit RSS fallback mirrors, and (Reddit V3) best-effort **post-page** fetches for multi-photo galleries and on-demand test posts — same instances as the RSS fallback, probed in parallel; all current instances sit behind anti-bot challenges (verified 2026-09-13), so requests typically fail fast and transfer no content | per-instance |
 | **FxTwitter / FxEmbed API** | Tweet metadata, media, translation | https://fxtwitter.com |
 | **video.twimg.com / x.com (X CDN & post pages)** | HTTP HEAD probes of public video file sizes (X V2/V3 "smart video" check) and OpenGraph image lookups on public post pages — only meta tags are read, no content is downloaded | https://x.com |
 | **gif.fxtwitter.com** | One HEAD probe per X GIF to check the animated WebP rendition exists before using it | https://fxtwitter.com |
