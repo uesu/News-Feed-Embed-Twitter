@@ -91,6 +91,10 @@
 #   10. (round 12c) TEST POST works in NATIVE MODE too: when the post JSON
 #       is unavailable, the base is built from the post's RSS feed entry
 #       (100-entry window) or, failing that, a redlib post page scrape.
+#   11. (round 12e) TEST POST gains a 2nd native source: the post's OWN RSS
+#       feed (/comments/<id>/.rss) — works for ANY post age, not just the
+#       combined feed's 100-entry window. Native photo path now logs how
+#       many media URLs the RSS content carries (gallery diagnostics).
 #
 # ■ WORKFLOW: identical to V1/V2. Test-area first:
 #   run: python "testing area/reddit_main_v3test.py"
@@ -892,7 +896,23 @@ def base_from_redlib_page(page_html: str | None, path: str) -> dict | None:
         "youtube_url": extract_youtube_url(area),
     }
 
-
+async def _fetch_post_rss(session: aiohttp.ClientSession, path: str):
+    """
+    Round 12e: the post's OWN RSS feed (/r/<sub>/comments/<id>/.rss).
+    Works for ANY post age — unlike the combined feed, which only carries
+    the newest 100 entries across all subreddits. The post itself is an
+    entry whose link is its permalink; comment entries are ignored by the
+    caller's permalink match.
+    """
+    for instance in REDDIT_RSS_INSTANCES:
+        url = f"{instance}{path}.rss"
+        if REDDIT_FEED_TOKEN and "reddit.com" in instance:
+            url += f"?feed={REDDIT_FEED_TOKEN}"
+        feed = await _fetch_feed(session, url, f"post-rss {instance}")
+        if feed:
+            return feed
+    return None
+    
 async def fetch_test_post_base(session: aiohttp.ClientSession, path: str,
                                label: str) -> dict | None:
     """
@@ -917,7 +937,20 @@ async def fetch_test_post_base(session: aiohttp.ClientSession, path: str,
                 logging.info(f"[{label}] test post found in the RSS feed — "
                              f"native base built from it.")
                 return entry_to_base_data(entry)
-    logging.info(f"[{label}] test post not in the RSS feed window — "
+    logging.info(f"[{label}] test post not in the combined feed window — "
+                 f"trying its own RSS feed...")
+    post_feed = await _fetch_post_rss(session, path)
+    if post_feed:
+        for entry in post_feed.entries:
+            p = normalize_reddit_path(str(getattr(entry, "link", "")))
+            if not p:
+                continue
+            if (extract_post_id(p) == target_pid
+                    and (extract_subreddit(p) or "").lower() == (target_sub or "").lower()):
+                logging.info(f"[{label}] test post found in its own RSS feed — "
+                             f"native base built from it.")
+                return entry_to_base_data(entry)
+    logging.info(f"[{label}] not in its own RSS feed either — "
                  f"trying the redlib post page...")
     pages = await asyncio.gather(
         *[_fetch_redlib_post_page(session, inst, path) for inst in REDDIT_RSS_INSTANCES]
@@ -1182,7 +1215,10 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                     media.append({"kind": "video", "url": base["redgifs_url"]})
             if not any(x["kind"] == "video" for x in media):
                 # ALL photos from the RSS content, best rendition each
-                for p in extract_native_media(base.get("content_html")):
+                native_items = extract_native_media(base.get("content_html"))
+                logging.info(f"[{label or 'native'}] native media in RSS content: "
+                             f"{len(native_items)} url(s).")
+                for p in native_items:
                     if has_video and _is_external_preview(p["url"]):
                         continue  # it's the video's screenshot
                     if p["kind"] == "image":
@@ -1510,10 +1546,10 @@ async def main():
                     if not base:
                         logging.error(f"TEST POST {TEST_POST_ID}: post JSON unavailable "
                                       f"(native mode), and the post is neither in the "
-                                      f"current RSS feed (100-entry window) nor reachable "
-                                      f"on any redlib instance — cannot build the test "
-                                      f"post. Add REDDIT_CLIENT_ID/SECRET secrets for "
-                                      f"reliable testing.")
+                                      f"combined feed (100-entry window), its own RSS "
+                                      f"feed, nor any redlib instance — cannot build "
+                                      f"the test post. Add REDDIT_CLIENT_ID/SECRET "
+                                      f"secrets for reliable testing.")
                         continue
 
             try:
