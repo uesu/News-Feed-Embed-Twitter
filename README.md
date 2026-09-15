@@ -86,7 +86,7 @@ and to [@dangered wolf](https://github.com/dangeredwolf), creator and lead devel
 ```
 ├── .github/
 │   └── workflows/
-│       ├── rss_monitor.yml      # X/Twitter monitor (choose V1/V2/V3 inside)
+│       ├── twitter_monitor.yml      # X/Twitter monitor (choose V1/V2/V3 inside)
 │       └── reddit_monitor.yml   # Reddit monitor (choose V1/V2 inside)
 ├── main.py                      # X/Twitter — V1 (classic content + fxtwitter embed)
 ├── main_v2.py                   # X/Twitter — V2 (Components V2, buttons OUTSIDE)
@@ -147,7 +147,7 @@ All three do the same job with the same multi-webhook routing and translation �
 | Custom accent color | n/a | ✅ (per-tweet `color`) | ✅ (per-tweet `color`) |
 | Switch to it | `run: python main.py` | `run: python main_v2.py` | `run: python main_v3.py` |
 
-**To switch versions:** open `.github/workflows/rss_monitor.yml` and change the run line:
+**To switch versions:** open `.github/workflows/twitter_monitor.yml` and change the run line:
 
 ```yaml
 run: python main.py        # V1
@@ -319,10 +319,10 @@ Every account in `ACCOUNTS` is routed to its own webhook secret:
 | `Ananta_EN` → | `WEBHOOK_ANANTA_EN` (e.g. `#ananta-news`) |
 | fallback (optional) | `DISCORD_WEBHOOK_URL` — used for any account without its own secret |
 
-### The workflow (`.github/workflows/rss_monitor.yml`)
+### The workflow (`.github/workflows/twitter_monitor.yml`)
 
 ```yaml
-name: RSS Feed Monitor
+name: Twitter Feed Monitor
 
 on:
   schedule:
@@ -350,7 +350,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run RSS Feed Monitor
+      - name: Run Twitter Feed Monitor
         env:
           ACCOUNTS: ${{ secrets.ACCOUNTS }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -689,7 +689,7 @@ author's "Manually run by …" pattern with a free external cron:
    Generate new token* → check **`workflow`** (and `repo` if private) → copy it.
 2. Sign up at [cron-job.org](https://cron-job.org) (free) and create a job **per workflow**:
    * **URL:**
-     `https://api.github.com/repos/<YOU>/<REPO>/actions/workflows/rss_monitor.yml/dispatches`
+     `https://api.github.com/repos/<YOU>/<REPO>/actions/workflows/twitter_monitor.yml/dispatches`
      (and a second job for `reddit_monitor.yml`)
    * **Method:** `POST` · **Crontab:** `*/10 * * * *`
    * **Headers:**
