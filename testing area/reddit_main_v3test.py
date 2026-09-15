@@ -335,8 +335,10 @@ def clean_rss_body(value: str | None) -> str:
     lines = [re.sub(r"\s{2,}", " ", ln).strip() for ln in text.splitlines()]
     lines = [ln for ln in lines if ln]
     # Drop lines that are ONLY a redd.it media URL (the RSS content inlines
-    # the post's images as links; they belong in the media gallery, not text).
+    # the post's images as links; they belong in the media gallery, not text)
+    # or ONLY a leftover [link]/[comments] nav label (RSS / redlib footers).
     lines = [ln for ln in lines if not (ln.startswith("http") and "redd.it/" in ln)]
+    lines = [ln for ln in lines if ln.lower() not in ("link", "comments", "[link]", "[comments]")]
     return "\n".join(lines)
 
 
@@ -823,23 +825,106 @@ def op_comment_text(op: dict) -> str:
 REDDIL_POST_TITLE_RE = re.compile(r"<h1[^>]*post_title[^>]*>", re.I)
 
 
-def extract_redlib_gallery(page_html: str | None) -> list[dict]:
-    """
-    Harvest redd.it media from a redlib post page. Scans only the post area
-    (post title -> first comment) to avoid sidebar/related thumbnails, then
-    applies the same dedupe/best-rendition rules as extract_native_media.
-    """
-    if not page_html:
-        return []
+def _redlib_post_area(page_html: str) -> str:
+    """HTML slice of the POST AREA (post title -> first comment) so sidebar,
+    related posts and comment thumbnails can't leak into the harvest.
+    Prefers the post_content element when the theme has one; the cut at the
+    first comment is made on the tag boundary (not mid-tag)."""
     m = REDDIL_POST_TITLE_RE.search(page_html)
     if m:
-        page_html = page_html[m.end():]
+        rest = page_html[m.end():]
+        close = rest.find("</h1>")
+        page_html = rest[close + 5:] if close != -1 else rest
+    start = re.search(r'<(?:div|section)\s+class="post_content', page_html, re.I)
+    if start:
+        page_html = page_html[start.start():]
     for marker in ('id="comment-', 'class="comment"', '<section class="comments"'):
         idx = page_html.lower().find(marker.lower())
         if idx != -1:
-            page_html = page_html[:idx]
+            lt = page_html.rfind("<", 0, idx)
+            page_html = page_html[:lt if lt != -1 else idx]
             break
-    return extract_native_media(page_html)
+    return page_html
+
+
+def extract_redlib_gallery(page_html: str | None) -> list[dict]:
+    """
+    Harvest redd.it media from a redlib post page (post area only), then
+    apply the same dedupe/best-rendition rules as extract_native_media.
+    """
+    if not page_html:
+        return []
+    return extract_native_media(_redlib_post_area(page_html))
+
+
+def base_from_redlib_page(page_html: str | None, path: str) -> dict | None:
+    """
+    Round 12c: native base for a TEST POST when the post JSON is unavailable
+    AND the post is not in the current RSS feed — title/author/body/media
+    links scraped from a redlib post page (post area only). Best-effort:
+    returns None for bot-challenge pages or unparseable layouts.
+    """
+    if not page_html:
+        return None
+    area = _redlib_post_area(page_html)
+    tm = re.search(r"<h1[^>]*post_title[^>]*>.*?<a[^>]*>([^<]+)</a>", page_html, re.S | re.I)
+    title = html_lib.unescape(tm.group(1)).strip() if tm else ""
+    if not title:
+        return None
+    author = "unknown"
+    am = re.search(r'class="post_author[^"]*"[^>]*>\s*(?:<[^>]+>\s*)?u?/?\s*([A-Za-z0-9_]{2,20})',
+                   page_html, re.I)
+    if am:
+        author = am.group(1)
+    og = (re.search(r'property="og:image"\s+content="([^"]+)"', page_html, re.I) or
+          re.search(r'content="([^"]+)"\s+property="og:image"', page_html, re.I))
+    return {
+        "title": title[:400],
+        "author": author,
+        "content_html": area,
+        "thumb": og.group(1) if og else None,
+        "body": clean_rss_body(area),
+        "vred_id": extract_vreddit_id(area),
+        "redgifs_url": extract_redgifs_url(area),
+        "youtube_url": extract_youtube_url(area),
+    }
+
+
+async def fetch_test_post_base(session: aiohttp.ClientSession, path: str,
+                               label: str) -> dict | None:
+    """
+    Round 12c: NATIVE fallback for TEST POST mode (post JSON 403'd / no
+    OAuth app). Source 1: the combined RSS feed (post must be inside the
+    100-entry window — true for anything from the last day or two).
+    Source 2: the redlib post page (same parallel lottery as the gallery
+    enrichment). None when neither source has the post.
+    """
+    target_sub = extract_subreddit(path)
+    target_pid = extract_post_id(path)
+    feed = await fetch_combined_feed(session)
+    if feed:
+        # match on subreddit + post id (feed permalinks carry a slug suffix,
+        # the test-post path does not)
+        for entry in feed.entries:
+            p = normalize_reddit_path(str(getattr(entry, "link", "")))
+            if not p:
+                continue
+            if (extract_post_id(p) == target_pid
+                    and (extract_subreddit(p) or "").lower() == (target_sub or "").lower()):
+                logging.info(f"[{label}] test post found in the RSS feed — "
+                             f"native base built from it.")
+                return entry_to_base_data(entry)
+    logging.info(f"[{label}] test post not in the RSS feed window — "
+                 f"trying the redlib post page...")
+    pages = await asyncio.gather(
+        *[_fetch_redlib_post_page(session, inst, path) for inst in REDDIT_RSS_INSTANCES]
+    )
+    for instance, html in zip(REDDIT_RSS_INSTANCES, pages):
+        base = base_from_redlib_page(html, path)
+        if base:
+            logging.info(f"[{label}] test post base via redlib ({instance}).")
+            return base
+    return None
 
 
 async def _fetch_redlib_post_page(session: aiohttp.ClientSession, instance: str,
@@ -1398,28 +1483,34 @@ async def main():
                 post_json = await fetch_post_json(session, extract_post_id(path) or "",
                                                   use_oauth=use_oauth)
             else:
-                # TEST POST mode: no RSS entry — build the base from the post
-                # JSON itself (needs the JSON path, i.e. FULL MODE).
+                # TEST POST mode: no RSS entry (feed bypassed on purpose).
+                # Try the post JSON (FULL MODE); when JSON is unavailable
+                # (native mode), build the base from the RSS feed entry or
+                # the redlib post page (round 12c).
                 post_json = await fetch_post_json(session, extract_post_id(path) or "",
                                                   use_oauth=use_oauth)
-                if not post_json:
-                    logging.error(f"TEST POST {TEST_POST_ID}: post JSON unavailable "
-                                  f"(no OAuth app, and the feed-token .json workaround "
-                                  f"403'd this run) — a test post cannot be built from "
-                                  f"RSS-less data. Add REDDIT_CLIENT_ID/SECRET secrets "
-                                  f"for reliable testing.")
-                    continue
-                st = str(post_json.get("selftext") or "")
-                base = {
-                    "title": str(post_json.get("title") or "")[:400],
-                    "author": str(post_json.get("author") or "unknown"),
-                    "content_html": st,
-                    "thumb": None,
-                    "body": strip_html(st),
-                    "vred_id": extract_vreddit_id(st) or extract_vreddit_id(str(post_json.get("url") or "")),
-                    "redgifs_url": extract_redgifs_url(st),
-                    "youtube_url": extract_youtube_url(st, str(post_json.get("url") or "")),
-                }
+                if post_json:
+                    st = str(post_json.get("selftext") or "")
+                    base = {
+                        "title": str(post_json.get("title") or "")[:400],
+                        "author": str(post_json.get("author") or "unknown"),
+                        "content_html": st,
+                        "thumb": None,
+                        "body": strip_html(st),
+                        "vred_id": extract_vreddit_id(st) or extract_vreddit_id(str(post_json.get("url") or "")),
+                        "redgifs_url": extract_redgifs_url(st),
+                        "youtube_url": extract_youtube_url(st, str(post_json.get("url") or "")),
+                    }
+                else:
+                    base = await fetch_test_post_base(session, path, TEST_POST_ID)
+                    if not base:
+                        logging.error(f"TEST POST {TEST_POST_ID}: post JSON unavailable "
+                                      f"(native mode), and the post is neither in the "
+                                      f"current RSS feed (100-entry window) nor reachable "
+                                      f"on any redlib instance — cannot build the test "
+                                      f"post. Add REDDIT_CLIENT_ID/SECRET secrets for "
+                                      f"reliable testing.")
+                        continue
 
             try:
                 data = await resolve_post_media(session, base, post_json,
