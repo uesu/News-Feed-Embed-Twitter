@@ -401,14 +401,61 @@ STATIC_BUTTONS = [
 Monitors subreddits through RSS (sorted by *new*) and posts each new thread to that subreddit's own
 Discord channel.
 
-## V1 vs V2
+## Choosing a version (V1 vs V2 vs V3)
 
-| | `reddit_main.py` (V1) | `reddit_main_v2.py` (V2) |
-|---|---|---|
-| Cost | **Free — no API key at all** | Requires an **EmbedEZ API key** (paid credits — see concerns below) |
-| Look | Plain message + `redditez.com` link → Discord auto-embeds it (same idea as fxtwitter), plus a bare YouTube link with its own playable embed when detected | Rich **Components V2** card (title, author, media gallery, 💬/🔁/❤️/👁️ stats + 🕐 timestamp, buttons inside) |
-| Buttons | Read Post → **original reddit.com thread** · ▶️ YouTube (conditional) · Citlali News · Support | Same set, nested inside the card |
-| Switch to it | `run: python reddit_main.py` | `run: python reddit_main_v2.py` |
+| | `reddit_main.py` (V1) | `reddit_main_v2.py` (V2) | `reddit_main_v3.py` (V3 — **current**) |
+|---|---|---|---|
+| Cost | **Free — no API key at all** | Requires an **EmbedEZ API key** (paid credits — see concerns below) | **Free — no API key at all** (Reddit's own media URLs) |
+| Look | Plain message + `redditez.com` link → Discord auto-embeds it (same idea as fxtwitter), plus a bare YouTube link with its own playable embed when detected | Rich **Components V2** card built from EmbedEZ data | Same rich **Components V2** card, built from **Reddit's own URLs** |
+| Media | Whatever the mirror unfurls | Up to 10 media items via EmbedEZ | **Every photo** (up to 20 → 2 containers), best rendition per photo (full-res `i.redd.it` for jpgs); video posts show the **video only**; never a silent video |
+| YouTube | Bare link (auto-embeds) + conditional button | Clickable line + button | **Thumbnail + animated `starwardspark3` button** (deterministic); optional real playback via `YOUTUBE_MEDIA_EMBED=1` |
+| Extra | — | — | 💬/👍 stats + **💬 OP comment** (FULL MODE), true crosspost embeds (fetches the original post), native `v.redd.it` video chain, **Discohook preview link** logged per card |
+| Switch to it | `run: python reddit_main.py` | `run: python reddit_main_v2.py` | `run: python reddit_main_v3.py` (production copy; the tested copy lives in `testing area/`) |
+
+### 🆕 Reddit V3 — what's different (round 12, 2026-09-15)
+
+* **All photos, always.** Multi-image posts post every photo (round-12 fix:
+  the native mode now extracts all `redd.it` media from the RSS content in
+  post order instead of only the feed's single 140px thumbnail). Renditions:
+  `i.redd.it` full-res swap for jpg/jpeg, largest signed preview URL for
+  PNGs — the 140px feed thumb is no longer used.
+* **Clean body text.** Stray `redd.it` image URLs that used to linger in the
+  body are stripped (they belong in the media gallery).
+* **Video = video only.** Posts with a reddit video (or a YouTube link) show
+  the video tile only — the duplicate first-frame / `external-preview.redd.it`
+  screenshot is dropped.
+* **Native video chain (no key, no proxy first).** `fallback_url` (FULL MODE)
+  → `v.redd.it/<id>/DASH_<q>.mp4` (self-contained mp4 **with audio**, straight
+  from Reddit, no signature, no expiry — tried 720→1080→480→360) → the
+  embedez/vxreddit CMAF muxing proxies as last resort. The signed
+  `packaged-media.redd.it` DASH master links are **not** used (they expire in
+  hours — the `e=…` param).
+* **YouTube (default: thumb + button).** The `YOUTUBE_MEDIA_EMBED` playback
+  attempt (seaof.glass) is **off by default** — it adds up to ~3 min of
+  per-post probe time and third-party flakiness. Default behavior: best
+  available `i.ytimg.com` thumbnail in the gallery + the animated
+  `starwardspark3` **YouTube** button. Set `YOUTUBE_MEDIA_EMBED=1` to re-enable
+  playback attempts (still degrades to thumb+button automatically).
+* **💬 OP comment (FULL MODE).** The stickied/top top-level comment by the
+  post author is fetched with the post JSON and shown as a capped (500 char)
+  line with a *full comment* link. `REDDIT_OP_COMMENT=0` disables.
+* **4000-char budget.** Header + body + OP line + stats are budgeted so the
+  card never exceeds Discord's total text limit (body is auto-trimmed last).
+* **Discohook preview.** After each successful post, a keyless public share
+  link rendering the exact card is created and logged (see
+  [Discohook](#-discohook-integration-round-12) below). `DISCOHOOK_PREVIEW=0`
+  disables.
+* **Test tools (verify before promoting).** In the V3 workflow
+  (`workflow_dispatch`):
+  * **`test_post`** input = `<subreddit>/<post_id>` (e.g. `AnantaLeaks/1wgvcz7`)
+    rebuilds exactly that post (bypasses feed + dedup; needs the post JSON
+    path to work — i.e. FULL MODE);
+  * **`dry_run: yes`** builds + logs the full payloads **without** posting to
+    Discord or saving the cache. Use both together to re-test the exact posts
+    that were wrong without spammng the channel.
+* **Environment switches** (all optional — sane defaults without them):
+  `YOUTUBE_MEDIA_EMBED` (default off), `REDDIT_OP_COMMENT` (default on),
+  `DISCOHOOK_PREVIEW` (default on), `FEEDTOKEN_JSON_STAGGER` (default 65 s).
 
 ### Secrets
 
@@ -419,7 +466,18 @@ Discord channel.
 | `REDDIT_FEED_TOKEN` *(optional — **recommended**)* | Your personal Reddit **feed token** (round 9): old.reddit.com → your username → **Preferences** (or `old.reddit.com/prefs/feeds`) → any feed link ends with `?feed=<token>` — copy just the token. Moves RSS requests to the logged-in rate tier, making multi-sub monitoring bulletproof. See the round-9 section below. |
 | `REDDIT_MIRROR` *(optional — set as a repo **Variable**, not a Secret)* | **V1 only.** Embed mirror host: `redditez.com` (default), `embeddit.deltandy.me`, or `vxreddit.com` |
 | `EMBEDEZ_API_KEY` | **V2 only** — from your embedez.com dashboard |
+| `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET` *(optional — V3)* | Reddit **script app** (reddit.com/prefs/apps → type "script" → redirect `http://localhost`). Enables V3 **FULL MODE** reliably (all photos, stats, OP comment, true crosspost embeds) via OAuth. 2026 note: new API access may require Reddit's approval form — V3 works without it (feed-token `.json` attempt, then native mode). |
 | `DISCORD_WEBHOOK_URL` *(optional)* | Catch-all fallback |
+
+**Optional V3 switches** (repo **Variables**, not Secrets — behavior is fine
+with none of them set):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `YOUTUBE_MEDIA_EMBED` | off | `1` = also try to *play* YouTube links (seaof.glass, +up to ~3 min probes/post); off = thumbnail + `starwardspark3` button |
+| `REDDIT_OP_COMMENT` | on | `0` = hide the 💬 OP comment line (FULL MODE) |
+| `DISCOHOOK_PREVIEW` | on | `0` = don't create/log the per-card Discohook share-link preview |
+| `FEEDTOKEN_JSON_STAGGER` | `65` | seconds between feed-token `.json` attempts (lower only if your token reliably works there) |
 
 ### The workflow (`.github/workflows/reddit_monitor.yml`)
 
@@ -640,6 +698,48 @@ best GitHub-runner track record; the rest are fallbacks).
 
 ---
 
+## 🔗 Discohook integration (round 12)
+
+[Discohook](https://discohook.app) is a free, public Components-V2 message
+designer/previewer. V3 uses its **keyless public API** (`POST
+https://discohook.app/api/v1/share`): after each successful Discord post it
+creates a **share link that renders the exact card** and logs the URL in the
+workflow run (`Discohook preview for <key>: https://discohook.app/?share=…`).
+That's a fast way to verify a card in the browser while reviewing the log
+before promoting a version.
+
+* **No key, no account, no webhook execution** — Discohook's public API has no
+  authenticated "send" endpoint (they plan one), so the monitor still posts
+  straight to your Discord webhooks; Discohook is preview-only here.
+* **Privacy:** the share payload contains only the public card content.
+  **No `targets` are sent, so your webhook URL never leaves the repo.** Links
+  are public while alive (7-day TTL; share IDs are reused after expiry), so
+  don't pin them permanently.
+* Disable with `DISCOHOOK_PREVIEW=0`; the share call is best-effort — if
+  Discohook is down, the post still goes out and only the preview is skipped.
+* Also available (not wired into the monitor): the `/unfurl?url=…` endpoint
+  (a re-implementation of Discord's link scraper — handy for debugging how a
+  bare URL would embed) and the `discohook.app` website itself for designing
+  cards by hand.
+
+## 🤖 Dependabot — automatic dependency updates (optional, free)
+
+This repo ships a ready-made, safe Dependabot setup:
+
+| File | Role |
+|---|---|
+| `.github/dependabot.yml` | The switch: weekly **pull requests** for `requirements.txt` (pip) + `.github/workflows` (GitHub Actions). **Delete this file to disable — the monitor is unaffected.** |
+| `.github/workflows/ci.yml` | The safety gate: every PR (including Dependabot's) must pass `pip install` + `compileall` + `tests/test_smoke.py` before it can be merged. |
+| `.github/workflows/dependabot_auto_merge.yml` | **Opt-in** auto-merge of Dependabot PRs once all checks are green. Disabled until you set the repo variable `AUTO_MERGE_DEPENDABOT=yes`. |
+| `docs/DEPENDABOT.md` | The **full explanation**: what it is, what it does, what it never does, whether it's optional (yes, 100%), costs/limits, and both ways to enable auto-merge. |
+
+**Short version:** Dependabot is free, built into GitHub, needs no token, and
+**only opens PRs — it never touches `main` until you merge** (or explicitly
+enable the gated auto-merge). Your monitor keeps running exactly as before in
+the meantime.
+
+---
+
 # 🛠 Full Setup Guide
 
 ## Step 0 — Make the repo your own (**do NOT fork**)
@@ -827,6 +927,44 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 ## 🗒 Changelog
 
+* **2026-09-15 — round 12 (Reddit V3 polish, from live test-channel review):**
+  * **All photos now post (native mode):** the RSS content is scanned for
+    every `redd.it` media URL in post order; multi-image posts no longer
+    show only the first thumbnail. (FULL MODE already had all photos.)
+  * **Best rendition per photo:** `i.redd.it` full-res swap for jpg/jpeg
+    (slug-prefixed preview names reduced to the bare file id) or the largest
+    signed preview URL — the 140px feed thumbnail is no longer used.
+  * **Body cleanup:** stray `redd.it` image URLs stripped from card text.
+  * **Video posts = video only:** duplicate first-frame /
+    `external-preview.redd.it` screenshots dropped whenever a video resolves
+    (also fixes YouTube posts that showed a screenshot tile + video).
+  * **Native video chain:** `v.redd.it/<id>/DASH_<q>.mp4` (self-contained mp4
+    **with audio**, no proxy/sig/expiry) now tried before the embedez/vxreddit
+    CMAF muxing proxies; signed `packaged-media.redd.it` masters deliberately
+    avoided (they expire in hours).
+  * **YouTube default = thumbnail + animated `starwardspark3` button**
+    (the old `▶️` emoji is gone from V1/V2 buttons too); playback attempt
+    (seaof.glass) moved behind `YOUTUBE_MEDIA_EMBED=1`; thumb chain
+    maxres→hq→mq.
+  * **💬 OP comment (FULL MODE):** stickied/top OP comment fetched with the
+    post JSON (`limit=25`) and shown capped (500 chars) with a full-comment
+    link; `REDDIT_OP_COMMENT=0` disables. Total text is now budgeted under
+    Discord's 4000-char limit.
+  * **Discohook preview (keyless):** per-card share link rendered from the
+    exact payload, logged to the workflow run; webhook URL never sent to it;
+    `DISCOHOOK_PREVIEW=0` disables.
+  * **Test tools:** workflow `test_post` input (`<sub>/<post_id>`) + `dry_run`
+    (payloads logged, Discord/cache untouched) for verifying before
+    promoting; `FEEDTOKEN_JSON_STAGGER` made configurable.
+  * **Dependabot + CI safety chain (all optional but shipped):**
+    `.github/dependabot.yml` (weekly PRs, delete to disable), `ci.yml`
+    (install + compile + offline smoke test gate on every PR),
+    `dependabot_auto_merge.yml` (opt-in auto-merge, green checks required,
+    enabled only via the `AUTO_MERGE_DEPENDABOT=yes` variable),
+    `tests/test_smoke.py`, and full user-facing docs in `docs/DEPENDABOT.md`.
+  * **Docs:** README V1/V2/**V3** comparison + V3 behavior, optional-variable
+    table, Discohook + Dependabot sections; `.env.example`, privacy policy
+    and ToS updated for the new third parties.
 * **2026-09-13 — round 10:**
   * **Full X Article support (V2/V3)** — article tweets now post cover image + **title** + full
     body text + in-article images/GIFs (GIFs animated via the existing gif.fxtwitter → fastgif

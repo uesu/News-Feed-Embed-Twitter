@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Effective date:** September 13, 2026
+**Effective date:** September 15, 2026 (updated for Reddit V3 round 12)
 **Applies to:** the *News Feed Embed* / *Citlali News* X (Twitter) + Reddit → Discord monitor
 ("the Service"), an open-source, self-hosted automation tool.
 
@@ -61,7 +61,13 @@ public URL being looked up):
 | **EmbedEZ API** (Reddit V2 only) | Reddit post metadata, media | https://embedez.com |
 | **redditez.com** (Reddit V1 default mirror) | No direct contact: the Service only *constructs* the mirror link from the public post path; **Discord's servers** fetch that URL to render the unfurled embed | https://www.redditez.com |
 | **embeddit.deltandy.me / vxreddit.com** (only if you switch `REDDIT_MIRROR`) | Same as above — link construction only; Discord fetches the mirror when rendering. Both are independent community projects, unaffiliated with this project | https://embeddit.deltandy.me |
-| **reddit.com** | Public subreddit RSS — all tracked subreddits in **one combined feed request per run** (`/r/a+b+c/new.rss?limit=100`), optionally carrying your personal feed token (sent only to reddit.com) | https://www.reddit.com/policies/privacy-policy |
+| **reddit.com** | Public subreddit RSS — all tracked subreddits in **one combined feed request per run** (`/r/a+b+c/new.rss?limit=100`), optionally carrying your personal feed token (sent only to reddit.com); plus per-post `.json` lookups in Reddit V3 (OAuth app token, or the feed token as a best-effort workaround) — public post data + public top-level comments only | https://www.reddit.com/policies/privacy-policy |
+| **i.redd.it / preview.redd.it / v.redd.it** (Reddit's own CDNs) | V3 media verification only: one short HTTP range probe per candidate media file (images/videos) to check it exists and is playable; the signed `packaged-media.redd.it` masters (which expire in hours) are never used | https://www.reddit.com/policies/privacy-policy |
+| **proxy.embedez.com / vxreddit.com** | V3 video fallback only, and only when Reddit's own `v.redd.it` DASH files are unavailable: the *public video file URL* (no account data) is passed so they can return a muxed (video+audio) mp4 for the card | https://embedez.com / per-instance |
+| **seaof.glass** (quartz) | Only if you enable `YOUTUBE_MEDIA_EMBED=1` (default off): one range probe per YouTube video id to see if a playable mp4 exists — the video id only | per-service |
+| **i.ytimg.com** (YouTube thumbnails) | One probe per YouTube post to pick the best available thumbnail (maxres/hq/mq) | https://policies.google.com/privacy |
+| **discohook.app** (optional, on by default) | Per-card **share-link preview** of the public card payload only (POST `/api/v1/share`, keyless). **No `targets` are sent, so your webhook URL and any tokens never leave the repository.** Share links are public for their 7-day TTL; disable with `DISCOHOOK_PREVIEW=0` | https://discohook.app |
+| **GitHub (Dependabot, optional)** | If you keep `.github/dependabot.yml`, GitHub's built-in Dependabot opens **pull requests only** (never pushes to `main`); it sees your dependency files, nothing else — see `docs/DEPENDABOT.md` | https://docs.github.com/en/site-policy/privacy-policies |
 | **cron-job.org** (optional) | External schedule trigger | https://cron-job.org/en/privacy/ |
 
 The Service never sends these third parties anything about your Discord server's members or content —

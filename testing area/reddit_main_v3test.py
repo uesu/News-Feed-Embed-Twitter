@@ -4,7 +4,7 @@
 # Same monitoring as V1/V2 (combined feed, feed token, 429 retries, mod-queue
 # safe 48h window, per-channel webhooks, dedup cache, auto-commit), but the
 # card media comes from REDDIT'S OWN URLs — no EmbedEZ API, no mirror links,
-# no credits. Round 11 (2026-09-15).
+# no credits. Round 12 (2026-09-15).
 #
 # ■ DATA PATHS (every fact below was live-verified 2026-09-15 from a
 #   datacenter IP with the Discordbot/2.0 UA):
@@ -26,15 +26,19 @@
 #     crosspost full-embeds (fetches the original post, 1 level).
 #
 #   NATIVE MODE — default, zero setup, works when JSON is unavailable:
-#     • photo: i.redd.it "swap" of the feed thumbnail (full-res, unsigned —
-#       verified 206 for jpg/jpeg; PNGs 404 there → signed preview URL as-is)
+#     • photo(s): EVERY redd.it image in the RSS content, in post order,
+#       best rendition each: i.redd.it "swap" (full-res, unsigned — verified
+#       206 for jpg/jpeg; slug-prefixed preview names reduced to the bare
+#       file id; PNGs 404 there → largest signed preview URL as-is)
 #     • GIF: i.redd.it .gif (unsigned) / signed preview .gif as-is
-#     • video: v.redd.it ID from the feed's [link] → CMAF files (open, no
-#       sig: CMAF_720.mp4 is video-only, so the AUDIO is muxed in via a
-#       public proxy chain, verified: h264 720p + AAC out):
-#           1. proxy.embedez.com/render/video.mp4?videoUrl=…&audioUrl=…
-#           2. vxreddit.com/redditvideo.mp4?video_url=…&audio_url=…
-#       (both keyless, both returned a correctly muxed mp4 in testing)
+#     • video (video posts show the video ONLY, never a dup thumb):
+#           1. v.redd.it/<id>/DASH_<q>.mp4 (720→1080→480→360) — self-
+#              contained mp4 WITH audio, straight from Reddit, open, no sig
+#              (round 12 — replaces the old proxy-first chain)
+#           2. proxy.embedez.com/render/video.mp4?videoUrl=…&audioUrl=…
+#              (CMAF video + CMAF audio -> muxed mp4; keyless, verified
+#              h264 720p + AAC out)
+#           3. vxreddit.com/redditvideo.mp4?video_url=…&audio_url=…
 #     • NEVER a silent video: if the chain fails → first-frame thumbnail +
 #       Read Post button.
 #   • signed preview.redd.it URLs MUST be used verbatim — changing ANY query
@@ -50,6 +54,36 @@
 # ■ DISCORD COMPONENTS-V2 LIMITS (verified against Discord docs, 2026-09-15):
 #   40 components per message, 10 per container, 10 items per media gallery,
 #   5 buttons per row, 4000 chars total text. → 20 photos = 2 containers × 10.
+#
+# ■ ROUND 12 FIXES (2026-09-15, from the live test-channel review):
+#   1. Multi-photo posts now show ALL photos (native mode extracts every
+#      redd.it image from the RSS content in post order; FULL mode had all
+#      already).
+#   2. Photos use the BEST rendition: i.redd.it full-res swap (jpg/jpeg) or
+#      the largest signed preview URL — never the 140px feed thumbnail.
+#   3. Stray redd.it image URLs no longer linger in the body text.
+#   4. Video posts show the VIDEO ONLY — no duplicate first-frame thumbnail;
+#      external-preview.redd.it thumbs (YouTube/external media screenshots)
+#      are dropped whenever the post resolves a video.
+#   5. Native reddit video chain now prefers v.redd.it DASH_<q>.mp4 — a
+#      SELF-CONTAINED mp4 (h264 + AAC, with audio) straight from Reddit, no
+#      proxy, no signature, no expiry — before the embedez/vxreddit CMAF
+#      muxing proxies. (The signed packaged-media.redd.it DASH master links
+#      expire within hours — the e=… query param — so they are NOT used.)
+#   6. YouTube: default is now thumbnail + the animated starwardspark3
+#      button (deterministic, no third-party transcoder in the hot path).
+#      Set YOUTUBE_MEDIA_EMBED=1 to also try seaof.glass playback.
+#   7. OP comment: FULL MODE fetches the stickied/top OP comment and shows
+#      it in the card ("💬 OP comment:", capped 500 chars + full-comment
+#      link). REDDIT_OP_COMMENT=0 disables.
+#   8. Discohook: after each successful post a keyless share-link preview of
+#      the exact card is created (discohook.app public API, /api/v1/share)
+#      and the URL is logged to the workflow run. The share data contains
+#      ONLY the public card payload — NO targets, so the webhook URL never
+#      leaves the repo. DISCOHOOK_PREVIEW=0 disables.
+#   9. Test tools: TEST_POST_ID=<sub>/<post_id> rebuilds one specific post;
+#      DRY_RUN=1 builds + logs payloads without touching Discord or the
+#      cache (use both from workflow_dispatch to verify before promoting).
 #
 # ■ WORKFLOW: identical to V1/V2. Test-area first:
 #   run: python "testing area/reddit_main_v3test.py"
@@ -138,12 +172,43 @@ VIDEO_PROXY_EMBEDEZ = ("https://proxy.embedez.com/render/video.mp4"
 VIDEO_PROXY_VXREDDIT = ("https://vxreddit.com/redditvideo.mp4"
                         "?video_url={video_url}&audio_url={audio_url}")
 
-# YouTube: also try to PLAY the video in the media block via seaof.glass
-# (quartz) — range-checked with 1 retry; on failure it degrades to
-# thumbnail + button automatically. (Live-test in the test channel; set to
-# False for thumbnail+button only.)
-YOUTUBE_MEDIA_EMBED = True
+def _env_flag(name: str, default: str) -> bool:
+    """Env bool: anything in 0/false/no/off/"" is False, everything else True."""
+    return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+# YouTube: default = thumbnail + animated starwardspark3 button (deterministic,
+# no third-party transcoder in the hot path). Set YOUTUBE_MEDIA_EMBED=1 to ALSO
+# try to play the video via seaof.glass (quartz) — range-checked with 1 retry,
+# degrades to thumbnail + button automatically.
+YOUTUBE_MEDIA_EMBED = _env_flag("YOUTUBE_MEDIA_EMBED", "0")
 YOUTUBE_MP4_TEMPLATE = "https://seaof.glass/yt/{video_id}.mp4"
+
+# FULL MODE only: include the OP's (stickied first, else first top-level)
+# comment in the card.
+INCLUDE_OP_COMMENT = _env_flag("REDDIT_OP_COMMENT", "1")
+OP_COMMENT_MAX_CHARS = 500
+
+# Test tools (round 12):
+#   TEST_POST_ID=<sub>/<post_id>  -> process exactly that post (bypasses feed)
+#   DRY_RUN=1                     -> build + log payloads, never touch Discord/cache
+TEST_POST_ID = os.getenv("TEST_POST_ID", "").strip()
+DRY_RUN = os.getenv("DRY_RUN", "0").strip().lower() in ("1", "true", "yes", "on")
+
+# Discohook share-link preview (public API, no key — see the function).
+DISCOHOOK_PREVIEW = _env_flag("DISCOHOOK_PREVIEW", "1")
+DISCOHOOK_SHARE_ENDPOINT = "https://discohook.app/api/v1/share"
+DISCOHOOK_SHARE_TTL = 7 * 24 * 3600  # 7 days (API max: 28)
+DISCOHOOK_USER_AGENT = "python:uesu.news-feed-embed:v3 (discohook share preview)"
+
+# Native reddit video ladder: v.redd.it DASH_<q>.mp4 files are self-contained
+# mp4s (h264 + AAC). 404s answer instantly, so the ladder is cheap.
+DASH_QUALITIES = (720, 1080, 480, 360)
+
+# Feed-token .json attempt: anonymous .json is ~1 req/min from datacenters, so
+# this is the polite sleep before each attempt (lower it ONLY if your token
+# reliably works on .json).
+FEEDTOKEN_JSON_STAGGER = int(os.getenv("FEEDTOKEN_JSON_STAGGER", "65"))
 
 # Text display budget (Discord: 4000 chars total per message across all
 # text components; we keep header+body+stats comfortably under it).
@@ -265,6 +330,9 @@ def clean_rss_body(value: str | None) -> str:
     text = re.sub(r"submitted by\s+/u/\S+\s+to\s+r/\S+", " ", text)
     lines = [re.sub(r"\s{2,}", " ", ln).strip() for ln in text.splitlines()]
     lines = [ln for ln in lines if ln]
+    # Drop lines that are ONLY a redd.it media URL (the RSS content inlines
+    # the post's images as links; they belong in the media gallery, not text).
+    lines = [ln for ln in lines if not (ln.startswith("http") and "redd.it/" in ln)]
     return "\n".join(lines)
 
 
@@ -417,7 +485,8 @@ async def fetch_post_json(session: aiohttp.ClientSession, post_id: str, use_oaut
     or None (caller falls back to native/RSS-only data).
     """
     global _feedtoken_json_failed
-    url = f"https://oauth.reddit.com/comments/{post_id}.json?limit=1&raw_json=1"
+    # limit=25: we need the TOP-LEVEL comments (data[1]) for the OP comment.
+    url = f"https://oauth.reddit.com/comments/{post_id}.json?limit=25&raw_json=1"
     headers = {"User-Agent": REDDIT_API_USER_AGENT}
     token = await get_oauth_token(session) if use_oauth else None
     if token:
@@ -426,9 +495,9 @@ async def fetch_post_json(session: aiohttp.ClientSession, post_id: str, use_oaut
         # Workaround attempt: the personal feed token on a .json endpoint.
         # Anonymous .json is 403 from datacenters; the token MIGHT lift it.
         url = (f"https://www.reddit.com/comments/{post_id}.json"
-               f"?limit=1&raw_json=1&feed={REDDIT_FEED_TOKEN}")
+               f"?limit=25&raw_json=1&feed={REDDIT_FEED_TOKEN}")
         headers = dict(BROWSER_HEADERS)
-        await asyncio.sleep(65)  # be polite to the anonymous tier (1 req/min)
+        await asyncio.sleep(FEEDTOKEN_JSON_STAGGER)  # anonymous tier ~1 req/min
     else:
         return None
 
@@ -454,6 +523,13 @@ async def fetch_post_json(session: aiohttp.ClientSession, post_id: str, use_oaut
                 body = await resp.text()
         data = json.loads(body)
         post = data[0]["data"]["children"][0]["data"]
+        try:
+            post["_top_comments"] = [
+                c for c in (data[1].get("data", {}).get("children") or [])
+                if isinstance(c, dict) and c.get("data", {}).get("body")
+            ]
+        except Exception:
+            post["_top_comments"] = []
         source = "oauth" if token else "feed-token"
         logging.info(f"[{post_id}] post JSON OK via {source} (FULL MODE).")
         return post
@@ -524,6 +600,15 @@ async def resolve_video_url(session: aiohttp.ClientSession, vid: str,
         if ok:
             logging.info(f"video url OK via fallback_url ({size} bytes).")
             return fallback_url
+    # Native ladder FIRST: v.redd.it DASH_<q>.mp4 = self-contained mp4
+    # (h264 + AAC, WITH audio) straight from Reddit — no proxy, no sig, no
+    # expiry. (The signed packaged-media.redd.it masters expire in hours.)
+    for quality in DASH_QUALITIES:
+        dash = f"https://v.redd.it/{vid}/DASH_{quality}.mp4"
+        ok, size = await media_url_ok(session, dash, timeout=30, video=True)
+        if ok:
+            logging.info(f"video url OK via native v.redd.it DASH_{quality} ({size} bytes).")
+            return dash
     for quality in (CMAF_QUALITY, 1080):
         c = cmaf_urls(vid, quality)
         em = VIDEO_PROXY_EMBEDEZ.format(video_url=quote(c["video_mp4"], safe=""),
@@ -587,12 +672,14 @@ def i_reddit_swap(url: str) -> str | None:
     """
     preview.redd.it/<file>.jpg|jpeg (signed) -> i.redd.it/<file>.jpg|jpeg
     (unsigned full-res; verified 2026-09-15 for jpg/jpeg, PNGs 404 there).
+    Slug-prefixed preview names (<postslug>-v0-<id>.jpg) are reduced to the
+    bare <id>.jpg first — i.redd.it only serves the bare file id.
     Returns the candidate URL or None.
     """
     m = re.match(r"https?://preview\.redd\.it/([\w.-]+\.(?:jpe?g))\?", url or "", re.I)
     if not m:
         return None
-    return f"https://i.redd.it/{m.group(1)}"
+    return f"https://i.redd.it/{_reddit_media_key(m.group(1))}"
 
 
 def extract_vreddit_id(text: str | None) -> str | None:
@@ -606,6 +693,105 @@ def extract_redgifs_url(text: str | None) -> str | None:
         return None
     url = f"https://media.redgifs.com/{m.group(1)}.mp4"
     return url
+
+
+def _is_external_preview(url: str | None) -> bool:
+    """external-preview.redd.it = screenshots of EXTERNAL media (mostly
+    YouTube embeds). They are video byproducts, not post photos."""
+    return bool(url) and "external-preview.redd.it" in url
+
+
+# ---------------------------------------------------------------------------
+# ■ NATIVE MODE MEDIA EXTRACTION (round 12)
+# ---------------------------------------------------------------------------
+REDDIT_MEDIA_URL_RE = re.compile(
+    r"https?://(?:i\.redd\.it|preview\.redd\.it|external-preview\.redd\.it)"
+    r"/[\w.-]+\.(?:jpe?g|png|gif|webp)(?:\?[^\"'<>\s]*)?",
+    re.I,
+)
+
+
+def _reddit_media_key(url: str) -> str:
+    """Group key so all renditions of ONE photo collapse to a single item:
+    preview.redd.it/<slug>-v0-<id>.png  and  i.redd.it/<id>.png  -> <id>.png
+    """
+    base = url.split("?", 1)[0].rsplit("/", 1)[-1].lower()
+    return re.sub(r"^.+-v\d+-", "", base)
+
+
+def extract_native_media(content_html: str | None) -> list[dict]:
+    """
+    ALL redd.it media from the RSS content HTML, in post order, one item per
+    photo with its BEST rendition: i.redd.it (unsigned, full-res) > the
+    signed preview URL with the largest ?width=. external-preview.redd.it
+    thumbs are kept here and dropped by the caller when a video resolves.
+    """
+    if not content_html:
+        return []
+    best: dict[str, tuple[int, int, str, str]] = {}
+    for order, m in enumerate(REDDIT_MEDIA_URL_RE.finditer(content_html)):
+        url = m.group(0).rstrip(".,;")
+        host = url.split("/")[2].lower()
+        key = _reddit_media_key(url)
+        ext = key.rsplit(".", 1)[-1]
+        kind = "gif" if ext == "gif" else "image"
+        score = 0
+        if host == "i.redd.it" and "?" not in url:
+            score += 100000  # unsigned full-res wins
+        wm = re.search(r"[?&]width=(\d+)", url)
+        if wm:
+            score += int(wm.group(1))
+        prev = best.get(key)
+        if prev is None or score > prev[0]:
+            best[key] = (score, order, kind, url)
+    items = sorted(best.values(), key=lambda t: t[1])
+    return [{"kind": k, "url": u} for _, _, k, u in items]
+
+
+# ---------------------------------------------------------------------------
+# ■ OP COMMENT (FULL MODE, round 12)
+# ---------------------------------------------------------------------------
+def extract_op_comment(post_json: dict) -> dict | None:
+    """
+    Finds the OP's top-level comment (stickied first, else the first
+    top-level comment by the post author). Returns
+    {"text", "permalink", "stickied"} or None.
+    """
+    top = post_json.get("_top_comments") or []
+    author = post_json.get("author")
+    if not top or not author:
+        return None
+
+    def _finish(d: dict) -> dict | None:
+        body = strip_html(d.get("body"))
+        if not body:
+            return None
+        permalink = (f"https://www.reddit.com{post_json.get('permalink', '').rstrip('/')}"
+                     f"/comment/{d.get('id', '')}/")
+        return {"text": body, "permalink": permalink, "stickied": bool(d.get("stickied"))}
+
+    fallback = None
+    for c in top:
+        d = c.get("data") if isinstance(c, dict) else None
+        if not d or d.get("author") != author or not (d.get("body") or "").strip():
+            continue
+        if d.get("stickied"):
+            return _finish(d)
+        if fallback is None:
+            fallback = d
+    return _finish(fallback) if fallback else None
+
+
+def op_comment_text(op: dict) -> str:
+    """Single-line card text: label + capped comment + full-comment link."""
+    t = op["text"].strip()
+    if len(t) > OP_COMMENT_MAX_CHARS:
+        cut = t[:OP_COMMENT_MAX_CHARS]
+        cut = cut.rsplit(" ", 1)[0].rstrip(",;:—-") + "…"
+    else:
+        cut = t
+    label = "💬 OP comment" + (" (stickied)" if op.get("stickied") else "")
+    return f"**{label}:** {cut} — [full comment]({op['permalink']})"
 
 
 async def resolve_youtube_media(session: aiohttp.ClientSession, vid: str, is_live: bool):
@@ -625,9 +811,15 @@ async def resolve_youtube_media(session: aiohttp.ClientSession, vid: str, is_liv
             if attempt == 1:
                 logging.info("YouTube mp4 check failed — retrying once (cold transcode?).")
                 await asyncio.sleep(5)
-    thumb = f"https://i.ytimg.com/vi/{vid}/maxresdefault.jpg"
-    ok, _ = await media_url_ok(session, thumb, timeout=15)
-    if not ok:
+    # maxresdefault 404s for videos without 4K; hqdefault always exists.
+    thumb = None
+    for name in ("maxresdefault", "hqdefault", "mqdefault"):
+        cand = f"https://i.ytimg.com/vi/{vid}/{name}.jpg"
+        ok, _ = await media_url_ok(session, cand, timeout=10)
+        if ok:
+            thumb = cand
+            break
+    if thumb is None:
         thumb = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
     return media_url, thumb
 
@@ -683,15 +875,22 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
     """
     Builds the final media list + meta for one post.
     media = [{"kind": "image"|"gif"|"video", "url": ...}, ...]
+    Round-12 rules:
+      • video posts -> the VIDEO tile ONLY (no first-frame / external thumb)
+      • photo posts -> ALL photos, best rendition each (never the 140px thumb)
+      • external-preview.redd.it screenshots dropped whenever a video resolves
     """
     media: list[dict] = []
     stats = None
     crosspost = None
+    op_comment = None
     body = base["body"]
     title = base["title"]
     author = base["author"]
     yt_url = base["youtube_url"]
-    yt_live = False
+    vid: str | None = None
+    fallback_url: str | None = None
+    video_poster: str | None = None
 
     if post_json:
         # ---- FULL MODE ----
@@ -701,6 +900,22 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
             body = strip_html(post_json["selftext"]) or body
         stats = {"comments": post_json.get("num_comments", 0),
                  "ups": post_json.get("ups", 0)}
+        if INCLUDE_OP_COMMENT:
+            op_comment = extract_op_comment(post_json)
+        # video id / youtube — resolved BEFORE the photo loop (round 12)
+        m = post_json.get("media")
+        if isinstance(m, dict) and isinstance(m.get("reddit_video"), dict):
+            rv = m["reddit_video"]
+            fallback_url = rv.get("fallback_url")
+            if fallback_url:
+                vid = extract_vreddit_id(fallback_url)
+        if not vid:
+            vid = base["vred_id"] or extract_vreddit_id(str(post_json.get("url") or ""))
+        if not yt_url:
+            yt_url = extract_youtube_url(str(post_json.get("selftext") or ""),
+                                         str(post_json.get("url") or ""))
+        yt_vid_early, _ = extract_youtube_id(yt_url)
+        has_video = bool(vid or yt_vid_early or base.get("redgifs_url"))
         if post_json.get("crosspost_post_link"):
             crosspost = {"url": post_json["crosspost_post_link"],
                          "path": normalize_reddit_path(post_json["crosspost_post_link"])}
@@ -733,7 +948,6 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
         preview_images = (post_json.get("preview") or {}).get("images") or []
         # ordered by preview.images; fall back to metadata order if absent
         ordered_keys = [p.get("id") for p in preview_images if isinstance(p, dict) and p.get("id") in mm]
-        video_poster = None  # first frame of a video post (used if the video tile is unavailable)
         if ordered_keys:
             for key in ordered_keys:
                 meta = mm[key]
@@ -743,7 +957,7 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                     g = (meta.get("u") or meta.get("s") or {}).get("url")
                     if g:
                         media.append({"kind": "gif", "url": g})
-                        continue
+                    continue
                 if meta.get("is_video"):
                     s = meta.get("s")
                     if video_poster is None and isinstance(s, dict) and s.get("url"):
@@ -755,11 +969,13 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                     if isinstance(v, dict) and v.get("url"):
                         url = v["url"]
                         break
-                if url:
+                # external-preview screenshots belong to a video, not the gallery
+                if url and not (has_video and _is_external_preview(url)):
                     media.append({"kind": "image", "url": url})
         else:
             for u in photo_urls_from_metadata(mm):
-                media.append({"kind": "image", "url": u})
+                if not (has_video and _is_external_preview(u)):
+                    media.append({"kind": "image", "url": u})
             g = gif_url_from_metadata(mm)
             if g:
                 media.append({"kind": "gif", "url": g})
@@ -769,66 +985,73 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                     if isinstance(s, dict) and s.get("url"):
                         video_poster = s["url"]
                         break
-        # video
-        vid = None
-        fallback_url = None
-        m = post_json.get("media")
-        if isinstance(m, dict) and isinstance(m.get("reddit_video"), dict):
-            rv = m["reddit_video"]
-            fallback_url = rv.get("fallback_url")
-            if fallback_url:
-                vid = extract_vreddit_id(fallback_url)
-        if not vid:
-            vid = base["vred_id"] or extract_vreddit_id(str(post_json.get("url") or ""))
-        if vid and not any(x["kind"] in ("video", "gif") for x in media):
-            vurl = await resolve_video_url(session, vid, fallback_url)
-            if vurl:
-                media.append({"kind": "video", "url": vurl})
-            elif video_poster and not media:
-                # audio chain failed -> show the first frame (never a silent video)
-                media.append({"kind": "image", "url": video_poster})
-                logging.info("video unavailable -> using first-frame poster + button.")
-        # youtube from the post's own url (link posts)
-        if not yt_url:
-            yt_url = extract_youtube_url(str(post_json.get("url") or ""))
     else:
         # ---- NATIVE MODE (RSS only) ----
-        thumb = base["thumb"]
-        if thumb:
-            if ".gif" in thumb:
-                media.append({"kind": "gif", "url": thumb})
-            else:
-                swap = i_reddit_swap(thumb)
-                if swap:
-                    ok, _ = await media_url_ok(session, swap, timeout=15)
-                    if ok:
-                        media.append({"kind": "image", "url": swap})
-                        logging.info("photo via i.redd.it full-res swap.")
+        vid = base["vred_id"]
+        yt_vid_early, _ = extract_youtube_id(yt_url)
+        has_video = bool(vid or yt_vid_early or base.get("redgifs_url"))
+
+    # ---- VIDEO FIRST (round 12): the tile is the video, never a dup thumb
+    video_url = None
+    if vid and not any(x["kind"] in ("video", "gif") for x in media):
+        video_url = await resolve_video_url(session, vid, fallback_url)
+
+    if video_url:
+        media.append({"kind": "video", "url": video_url})
+        # drop the video's own screenshot (external-preview) if one slipped in
+        media = [x for x in media
+                 if x["kind"] in ("video", "gif") or not _is_external_preview(x["url"])]
+    else:
+        if not post_json:
+            # ---- NATIVE MODE media (no reddit video resolved) ----
+            if base.get("redgifs_url"):
+                ok, _ = await media_url_ok(session, base["redgifs_url"], timeout=30, video=True)
+                if ok:
+                    media.append({"kind": "video", "url": base["redgifs_url"]})
+            if not any(x["kind"] == "video" for x in media):
+                # ALL photos from the RSS content, best rendition each
+                for p in extract_native_media(base.get("content_html")):
+                    if has_video and _is_external_preview(p["url"]):
+                        continue  # it's the video's screenshot
+                    if p["kind"] == "image":
+                        swap = i_reddit_swap(p["url"])
+                        if swap:
+                            ok, _ = await media_url_ok(session, swap, timeout=15)
+                            if ok:
+                                p["url"] = swap
+                                logging.info(f"photo via i.redd.it full-res swap ({swap}).")
+                    media.append(p)
+            if not media and base.get("thumb"):
+                # legacy fallback: the feed's single thumbnail
+                thumb = base["thumb"]
+                if ".gif" in thumb:
+                    media.append({"kind": "gif", "url": thumb})
+                else:
+                    swap = i_reddit_swap(thumb)
+                    if swap:
+                        ok, _ = await media_url_ok(session, swap, timeout=15)
+                        if ok:
+                            media.append({"kind": "image", "url": swap})
+                        else:
+                            media.append({"kind": "image", "url": thumb})
                     else:
                         media.append({"kind": "image", "url": thumb})
-                else:
-                    media.append({"kind": "image", "url": thumb})
-        # video: v.redd.it id from the feed's [link] (skip GIF posts)
-        if base["vred_id"] and not any(x["kind"] in ("video", "gif") for x in media):
-            vurl = await resolve_video_url(session, base["vred_id"], None)
-            if vurl:
-                media.append({"kind": "video", "url": vurl})
-        # redgifs link post
-        if base["redgifs_url"] and not any(x["kind"] == "video" for x in media):
-            ok, _ = await media_url_ok(session, base["redgifs_url"], timeout=30, video=True)
-            if ok:
-                media.append({"kind": "video", "url": base["redgifs_url"]})
+        elif video_poster and not media:
+            # FULL MODE, video chain failed -> first frame (never a silent video)
+            media.append({"kind": "image", "url": video_poster})
+            logging.info("video unavailable -> using first-frame poster + button.")
 
-    # youtube media tile (both modes)
+    # youtube tile / thumbnail (both modes)
     yt_vid, yt_live = extract_youtube_id(yt_url)
-    yt_media_url = None
     if yt_vid:
         yt_media_url, yt_thumb = await resolve_youtube_media(session, yt_vid, yt_live)
         if yt_media_url and not any(x["kind"] == "video" for x in media):
             media.append({"kind": "video", "url": yt_media_url})
-        elif yt_media_url is None:
-            # keep the thumbnail visible even when the video tile is not used
-            if not media:
+        if not any(x["kind"] == "video" for x in media):
+            # thumbnail + button (round-12 default): the YT thumb is the
+            # canonical preview — replace external screenshots, add if absent
+            media = [x for x in media if not _is_external_preview(x["url"])]
+            if not any(x["kind"] == "image" for x in media):
                 media.append({"kind": "image", "url": yt_thumb})
 
     media = media[:MAX_GALLERIES * MEDIA_PER_GALLERY]
@@ -839,6 +1062,7 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
         "media": media,
         "stats": stats,
         "crosspost": crosspost,
+        "op_comment": op_comment,
         "youtube_url": yt_url,
         "youtube_id": yt_vid,
         "youtube_live": yt_live,
@@ -887,6 +1111,13 @@ def build_v3_payload(subreddit: str, data: dict, reddit_url: str, posted_ts: int
 
     row = build_action_row(reddit_url, data["youtube_url"])
 
+    # Char budget: Discord caps TOTAL text at 4000 across all components.
+    op_line = op_comment_text(data["op_comment"]) if data.get("op_comment") else ""
+    body_budget = max(300, 3800 - len(header) - len(op_line) - len(stats_line))
+    body_out = data["body"][:body_budget]
+    if len(data["body"]) > body_budget:
+        body_out = body_out.rsplit(" ", 1)[0].rstrip() + "…"
+
     def gallery(items: list) -> dict:
         return {"type": 12, "items": [{"media": {"url": m["url"]}} for m in items]}
 
@@ -895,8 +1126,10 @@ def build_v3_payload(subreddit: str, data: dict, reddit_url: str, posted_ts: int
         container1 = {"type": 17, "accent_color": 16729344, "components": [
             {"type": 10, "content": header},
         ]}
-        if data["body"]:
-            container1["components"].append({"type": 10, "content": data["body"]})
+        if body_out:
+            container1["components"].append({"type": 10, "content": body_out})
+        if op_line:
+            container1["components"].append({"type": 10, "content": op_line})
         container1["components"].append({"type": 14, "divider": True, "spacing": 1})
         container1["components"].append(gallery(first))
         container2 = {"type": 17, "accent_color": 16729344, "components": [
@@ -910,8 +1143,10 @@ def build_v3_payload(subreddit: str, data: dict, reddit_url: str, posted_ts: int
                 "components": [container1, container2]}
 
     inner = [{"type": 10, "content": header}]
-    if data["body"]:
-        inner.append({"type": 10, "content": data["body"]})
+    if body_out:
+        inner.append({"type": 10, "content": body_out})
+    if op_line:
+        inner.append({"type": 10, "content": op_line})
     if media:
         inner.append({"type": 14, "divider": True, "spacing": 1})
         inner.append(gallery(media))
@@ -920,6 +1155,60 @@ def build_v3_payload(subreddit: str, data: dict, reddit_url: str, posted_ts: int
     inner.append(row)
     return {"flags": IS_COMPONENTS_V2,
             "components": [{"type": 17, "accent_color": 16729344, "components": inner}]}
+
+
+# ---------------------------------------------------------------------------
+# ■ DISCOHOOK SHARE-LINK PREVIEW (optional, keyless, round 12)
+# ---------------------------------------------------------------------------
+async def create_discohook_share(session: aiohttp.ClientSession, payload: dict,
+                                 label: str) -> str | None:
+    """
+    Creates a public Discohook share link (discohook.app) that renders the
+    EXACT card we just posted — handy for verifying in the browser before
+    promoting. Keyless public API (POST /api/v1/share), best-effort: any
+    failure only logs, posting is never blocked.
+
+    PRIVACY: the share data contains ONLY the public card payload. NO
+    `targets` are sent, so the webhook URL (and any token) never leaves this
+    repo. Share IDs are reused after the TTL, so treat links as 7-day temp.
+    """
+    if not DISCOHOOK_PREVIEW:
+        return None
+    query_data = {"version": "d2", "messages": [{"data": payload}]}
+    try:
+        async with session.post(
+            DISCOHOOK_SHARE_ENDPOINT,
+            json={"data": query_data, "ttl": DISCOHOOK_SHARE_TTL},
+            headers={"User-Agent": DISCOHOOK_USER_AGENT},
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                url = data.get("url")
+                logging.info(f"Discohook preview for {label}: {url}")
+                return url
+            logging.warning(f"Discohook share HTTP {resp.status} for {label} — preview skipped.")
+    except Exception as e:
+        logging.warning(f"Discohook share error for {label} — preview skipped: {e}")
+    return None
+
+
+def test_post_entries(now: float) -> list:
+    """
+    TEST_POST_ID=<subreddit>/<post_id> -> one synthetic entry so a specific
+    post can be rebuilt on demand (workflow_dispatch input `test_post`).
+    Bypasses the feed and the dedup cache on purpose (re-testing is the
+    point). The post needs the JSON path to work (FULL MODE).
+    """
+    parts = TEST_POST_ID.split("/", 1)
+    sub_name, pid = (parts + [""])[:2] if len(parts) < 2 else parts
+    sub = _subreddit_by_name(sub_name) if sub_name else None
+    if not sub or not pid:
+        logging.error(f"TEST_POST_ID: '{TEST_POST_ID}' — use <subreddit>/<post_id>, "
+                      f"e.g. AnantaLeaks/1wgvcz7 (subreddit must be in SUBREDDITS).")
+        return []
+    path = f"/r/{sub}/comments/{pid}/"
+    return [(sub, path, f"{sub}_{pid}", now, now, None)]
 
 
 # ---------------------------------------------------------------------------
@@ -945,51 +1234,57 @@ async def main():
     use_oauth = bool(REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET)
 
     async with aiohttp.ClientSession() as session:
-        # ---- PRIMARY: one combined request for all subreddits -------------
-        combined = await fetch_combined_feed(session)
-        new_posts = []  # (subreddit, path, unique_key, published_ts, entry)
-
-        def collect(entries, known_subreddit: str | None):
-            for entry in entries:
-                raw_link = str(getattr(entry, "link", ""))
-                path = normalize_reddit_path(raw_link)
-                if not path:
-                    continue
-                sub = known_subreddit or _subreddit_by_name(extract_subreddit(path))
-                if not sub:
-                    continue
-                post_id = extract_post_id(path)
-                if not post_id:
-                    continue
-                unique_key = f"{sub}_{post_id}"
-                if unique_key in posted:
-                    continue
-                published_parsed = entry.get("published_parsed")
-                updated_parsed = entry.get("updated_parsed")
-                published_ts = time.mktime(published_parsed) if published_parsed else now
-                updated_ts = time.mktime(updated_parsed) if updated_parsed else published_ts
-                activity_ts = max(published_ts, updated_ts)
-                if not is_first_run and (now - activity_ts > MAX_AGE_SECONDS):
-                    continue
-                new_posts.append((sub, path, unique_key, published_ts, activity_ts, entry))
-
-        if combined and combined.entries:
-            entries = [combined.entries[0]] if is_first_run else combined.entries
-            collect(entries, None)
+        # ---- TEST POST mode (round 12): rebuild one specific post --------
+        if TEST_POST_ID:
+            logging.info(f"TEST POST mode: {TEST_POST_ID} (dry_run={DRY_RUN}) — "
+                         f"feed + dedup cache bypassed on purpose.")
+            new_posts = test_post_entries(now)
         else:
-            logging.info("Combined feed unavailable — falling back to per-subreddit feeds...")
+            # ---- PRIMARY: one combined request for all subreddits ---------
+            combined = await fetch_combined_feed(session)
+            new_posts = []  # (subreddit, path, unique_key, published_ts, activity_ts, entry)
 
-            async def _staggered_fetch(sub: str, index: int):
-                await asyncio.sleep(index * FEED_FETCH_STAGGER)
-                return await fetch_working_reddit_feed(session, sub)
+            def collect(entries, known_subreddit: str | None):
+                for entry in entries:
+                    raw_link = str(getattr(entry, "link", ""))
+                    path = normalize_reddit_path(raw_link)
+                    if not path:
+                        continue
+                    sub = known_subreddit or _subreddit_by_name(extract_subreddit(path))
+                    if not sub:
+                        continue
+                    post_id = extract_post_id(path)
+                    if not post_id:
+                        continue
+                    unique_key = f"{sub}_{post_id}"
+                    if unique_key in posted:
+                        continue
+                    published_parsed = entry.get("published_parsed")
+                    updated_parsed = entry.get("updated_parsed")
+                    published_ts = time.mktime(published_parsed) if published_parsed else now
+                    updated_ts = time.mktime(updated_parsed) if updated_parsed else published_ts
+                    activity_ts = max(published_ts, updated_ts)
+                    if not is_first_run and (now - activity_ts > MAX_AGE_SECONDS):
+                        continue
+                    new_posts.append((sub, path, unique_key, published_ts, activity_ts, entry))
 
-            tasks = [_staggered_fetch(sub, i) for i, sub in enumerate(SUBREDDITS)]
-            feeds = await asyncio.gather(*tasks)
-            for subreddit, feed in zip(SUBREDDITS, feeds):
-                if not feed or not feed.entries:
-                    continue
-                entries = [feed.entries[0]] if is_first_run else feed.entries
-                collect(entries, subreddit)
+            if combined and combined.entries:
+                entries = [combined.entries[0]] if is_first_run else combined.entries
+                collect(entries, None)
+            else:
+                logging.info("Combined feed unavailable — falling back to per-subreddit feeds...")
+
+                async def _staggered_fetch(sub: str, index: int):
+                    await asyncio.sleep(index * FEED_FETCH_STAGGER)
+                    return await fetch_working_reddit_feed(session, sub)
+
+                tasks = [_staggered_fetch(sub, i) for i, sub in enumerate(SUBREDDITS)]
+                feeds = await asyncio.gather(*tasks)
+                for subreddit, feed in zip(SUBREDDITS, feeds):
+                    if not feed or not feed.entries:
+                        continue
+                    entries = [feed.entries[0]] if is_first_run else feed.entries
+                    collect(entries, subreddit)
 
         total_found = len(new_posts)
         if total_found == 0:
@@ -1009,15 +1304,48 @@ async def main():
                 continue
 
             reddit_url = f"https://www.reddit.com{path}"
-            base = entry_to_base_data(entry)
-
-            post_json = await fetch_post_json(session, extract_post_id(path) or "",
-                                              use_oauth=use_oauth)
+            if entry is not None:
+                base = entry_to_base_data(entry)
+                post_json = await fetch_post_json(session, extract_post_id(path) or "",
+                                                  use_oauth=use_oauth)
+            else:
+                # TEST POST mode: no RSS entry — build the base from the post
+                # JSON itself (needs the JSON path, i.e. FULL MODE).
+                post_json = await fetch_post_json(session, extract_post_id(path) or "",
+                                                  use_oauth=use_oauth)
+                if not post_json:
+                    logging.error(f"TEST POST {TEST_POST_ID}: post JSON unavailable "
+                                  f"(no OAuth app, and the feed-token .json workaround "
+                                  f"403'd this run) — a test post cannot be built from "
+                                  f"RSS-less data. Add REDDIT_CLIENT_ID/SECRET secrets "
+                                  f"for reliable testing.")
+                    continue
+                st = str(post_json.get("selftext") or "")
+                base = {
+                    "title": str(post_json.get("title") or "")[:400],
+                    "author": str(post_json.get("author") or "unknown"),
+                    "content_html": st,
+                    "thumb": None,
+                    "body": strip_html(st),
+                    "vred_id": extract_vreddit_id(st) or extract_vreddit_id(str(post_json.get("url") or "")),
+                    "redgifs_url": extract_redgifs_url(st),
+                    "youtube_url": extract_youtube_url(st, str(post_json.get("url") or "")),
+                }
 
             try:
                 data = await resolve_post_media(session, base, post_json)
                 posted_ts = int(max(published_ts, activity_ts))
                 payload = build_v3_payload(subreddit, data, reddit_url, posted_ts)
+
+                if DRY_RUN:
+                    kinds = ",".join(sorted({m["kind"] for m in data["media"]})) or "text"
+                    mode = "full" if data["full_mode"] else "native"
+                    logging.info(f"DRY RUN (Discord NOT touched): {unique_key} "
+                                 f"(media={kinds} | {mode} | {len(data['media'])} item(s))")
+                    logging.info(f"DRY RUN payload for {unique_key}:\n"
+                                 f"{json.dumps(payload, indent=2, ensure_ascii=False)}")
+                    continue
+
                 target_url = f"{webhook_url}?with_components=true"
                 async with session.post(target_url, json=payload,
                                         timeout=aiohttp.ClientTimeout(total=15)) as resp:
@@ -1027,6 +1355,7 @@ async def main():
                         mode = "full" if data["full_mode"] else "native"
                         logging.info(f"Reddit V3 Posted: {unique_key} (media={kinds} | {mode} | "
                                      f"{len(data['media'])} item(s))")
+                        await create_discohook_share(session, payload, unique_key)
                         await asyncio.sleep(1.5)
                     else:
                         body = await resp.text()
@@ -1034,8 +1363,11 @@ async def main():
             except Exception as e:
                 logging.error(f"Failed building/posting {unique_key}: {e}")
 
-    save_posted(posted)
-    logging.info("Reddit V3 Monitor execution finished.")
+    if DRY_RUN:
+        logging.info("DRY RUN finished: cache NOT saved, Discord NOT touched.")
+    else:
+        save_posted(posted)
+        logging.info("Reddit V3 Monitor execution finished.")
 
 
 if __name__ == "__main__":

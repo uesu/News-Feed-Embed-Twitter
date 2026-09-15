@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Effective date:** September 11, 2026
+**Effective date:** September 11, 2026 (updated September 15, 2026 for Reddit V3 round 12)
 **Applies to:** the *News Feed Embed* / *Citlali News* X (Twitter) + Reddit → Discord monitor
 ("the Service"), an open-source, self-hosted automation tool.
 
@@ -39,12 +39,17 @@ The Service depends on free/community-run third parties — Nitter mirrors, Redl
 the independent "fastgif" GIF converter (fastgif-production.up.railway.app, used only as a
 probe-verified fallback when FxTwitter's GIF CDN is down), EmbedEZ, the redditez.com /
 Embeddit (embeddit.deltandy.me) / vxReddit (vxreddit.com) Reddit-embed mirrors (V1 switchable),
-reddit.com RSS, GitHub Actions,
+reddit.com RSS and Reddit's own media CDNs (i.redd.it / preview.redd.it / v.redd.it), the
+proxy.embedez.com / vxreddit.com video-muxing fallbacks (Reddit V3, used only when Reddit's own
+video files are unavailable), seaof.glass (optional YouTube playback, off by default),
+i.ytimg.com (YouTube thumbnails), discohook.app (optional per-card share-link preview, on by
+default, keyless public API), GitHub Actions,
 cron-job.org, and Discord webhooks. **Availability is not
 guaranteed**: mirrors rotate or shut down, APIs change (EmbedEZ explicitly warns of breaking
 changes), GitHub's native scheduler is best-effort, and the EmbedEZ API may consume paid credits per
 its own pricing. The author of this project has no control over, and accepts no liability for, those
-services.
+services. Optional extras (Discohook preview, Dependabot dependency-update PRs) may be disabled at
+any time without affecting the core monitor — see the README and `docs/DEPENDABOT.md`.
 
 ## 5. Content Responsibility
 
