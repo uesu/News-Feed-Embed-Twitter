@@ -1,4 +1,4 @@
-name: RSS Feed Monitor
+name: Twitter Feed Monitor
 
 on:
   schedule:
