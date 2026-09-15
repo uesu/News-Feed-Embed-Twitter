@@ -88,6 +88,9 @@
 #   9. Test tools: TEST_POST_ID=<sub>/<post_id> rebuilds one specific post;
 #      DRY_RUN=1 builds + logs payloads without touching Discord or the
 #      cache (use both from workflow_dispatch to verify before promoting).
+#   10. (round 12c) TEST POST works in NATIVE MODE too: when the post JSON
+#       is unavailable, the base is built from the post's RSS feed entry
+#       (100-entry window) or, failing that, a redlib post page scrape.
 #
 # ■ WORKFLOW: identical to V1/V2. Test-area first:
 #   run: python "testing area/reddit_main_v3test.py"
@@ -231,8 +234,8 @@ STATIC_BUTTONS = [
 # ---------------------------------------------------------------------------
 # watch / shorts / youtu.be / live (live = no mp4 possible -> thumb+button)
 YOUTUBE_RE = re.compile(
-    r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?[^\"'<>)\]\s]*v=|shorts/|live/)[^\"'<>)\]\s]*"
-    r"|youtu\.be/[^\"'<>)\]\s]+)",
+    r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?[^\\"'<>)\]\s]*v=|shorts/|live/)[^\\"'<>)\]\s]*"
+    r"|youtu\.be/[^\\"'<>)\]\s]+)",
     re.IGNORECASE,
 )
 YOUTUBE_ID_RE = re.compile(r"(?:v=|youtu\.be/|shorts/|live/)([A-Za-z0-9_-]{11})")
@@ -712,7 +715,7 @@ def _is_external_preview(url: str | None) -> bool:
 # ---------------------------------------------------------------------------
 REDDIT_MEDIA_URL_RE = re.compile(
     r"https?://(?:i\.redd\.it|preview\.redd\.it|external-preview\.redd\.it)"
-    r"/[\w.-]+\.(?:jpe?g|png|gif|webp)(?:\?[^\"'<>\s]*)?",
+    r"/[\w.-]+\.(?:jpe?g|png|gif|webp)(?:\?[^\\"'<>\s]*)?",
     re.I,
 )
 
@@ -1372,7 +1375,8 @@ def test_post_entries(now: float) -> list:
     TEST_POST_ID=<subreddit>/<post_id> -> one synthetic entry so a specific
     post can be rebuilt on demand (workflow_dispatch input `test_post`).
     Bypasses the feed and the dedup cache on purpose (re-testing is the
-    point). The post needs the JSON path to work (FULL MODE).
+    point). Data source: post JSON when reachable (FULL MODE); otherwise
+    the RSS feed entry / redlib post page (round 12c native fallback).
     """
     parts = TEST_POST_ID.split("/", 1)
     sub_name, pid = (parts + [""])[:2] if len(parts) < 2 else parts
