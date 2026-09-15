@@ -33,7 +33,7 @@ jobs:
       # NOTE: no checkout step on purpose — pull_request_target runs with
       # main-branch secrets, so we never execute PR (untrusted) code.
       - name: Evaluate + merge if all checks are green
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const owner = context.repo.owner;
