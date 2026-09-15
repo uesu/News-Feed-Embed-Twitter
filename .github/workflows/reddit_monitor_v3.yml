@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # allows manual + external-cron triggering
     inputs:
       test_post:
-                description: 'Optional TEST POST: rebuild ONE specific post, e.g. AnantaLeaks/1wgvcz7 (native RSS/redlib fallback if the post JSON 403s). Leave empty for a normal run.'
+        description: 'Optional TEST POST: rebuild ONE specific post, e.g. AnantaLeaks/1wgvcz7 (native RSS/redlib fallback if the post JSON 403s). Leave empty for a normal run.'
         required: false
         default: ''
       dry_run:
@@ -24,10 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
