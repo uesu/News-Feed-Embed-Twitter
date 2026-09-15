@@ -128,7 +128,7 @@ and to [@dangered wolf](https://github.com/dangeredwolf), creator and lead devel
 Every new or changed script is proven **before** it touches production. The process:
 
 1. **The updated script lives in the `testing area/` folder first** (e.g. `testing area/reddit_maintest.py`,
-   `testing area/main_v3test.py`). Never run an unproven script from the repo root.
+   `testing area/main_v3testproround10.py`, `testing area/reddit_main_v3test.py`). Never run an unproven script from the repo root.
 2. **Point the workflow's `run:` line at the test copy.** The **double quotes are required** because
    the folder name contains a space:
    ```yaml
