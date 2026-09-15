@@ -13,6 +13,9 @@ __pycache__/
 *$py.class
 *.so
 
+# Local logs
+*.log
+
 # Virtual environments
 venv/
 .venv/

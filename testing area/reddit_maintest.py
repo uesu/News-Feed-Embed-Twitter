@@ -359,7 +359,7 @@ def build_components(reddit_url: str, youtube_url: str | None = None) -> list:
     ]
     if youtube_url:
         buttons.append({"type": 2, "style": 5, "label": "YouTube", "url": youtube_url,
-                        "emoji": {"name": "▶️"}})
+                        "emoji": {"id": "1483083423290490891", "name": "starwardspark3", "animated": True}})
     for btn in STATIC_BUTTONS:
         b = {"type": 2, "style": 5, "label": btn["label"], "url": btn["url"]}
         if btn.get("emoji"):

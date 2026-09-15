@@ -387,7 +387,7 @@ def build_nested_action_row(reddit_url: str, youtube_url: str | None = None) -> 
     ]
     if youtube_url:
         buttons.append({"type": 2, "style": 5, "label": "YouTube", "url": youtube_url,
-                        "emoji": {"name": "▶️"}})
+                        "emoji": {"id": "1483083423290490891", "name": "starwardspark3", "animated": True}})
     for btn in STATIC_BUTTONS:
         b = {"type": 2, "style": 5, "label": btn["label"], "url": btn["url"]}
         if btn.get("emoji"):
@@ -445,7 +445,7 @@ def build_v2_payload(subreddit: str, data: dict, reddit_url: str,
     if youtube_url:
         inner_components.append({
             "type": 10,
-            "content": f"▶️ **YouTube:** {youtube_url}",
+            "content": f"**YouTube:** {youtube_url}",
         })
 
     inner_components.append({"type": 14, "divider": True, "spacing": 1})

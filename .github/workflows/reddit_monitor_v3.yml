@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: '*/10 * * * *'   # backup only — GitHub cron is best-effort
   workflow_dispatch:          # allows manual + external-cron triggering
+    inputs:
+      test_post:
+        description: 'Optional TEST POST: rebuild ONE specific post, e.g. AnantaLeaks/1wgvcz7 (needs FULL MODE / post JSON to work). Leave empty for a normal run.'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Dry run: build + log the payloads, but do NOT post to Discord and do NOT save the cache. Useful before promoting.'
+        type: choice
+        options: ['no', 'yes']
+        required: false
+        default: 'no'
 
 permissions:
   contents: write
@@ -32,6 +43,20 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           EMBEDEZ_API_KEY: ${{ secrets.EMBEDEZ_API_KEY }}
           REDDIT_FEED_TOKEN: ${{ secrets.REDDIT_FEED_TOKEN }}   # your Reddit feed token (recommended — old.reddit.com -> Preferences -> Feeds; V3 also tries it on .json for full mode)
+          # Test tools (round 12): manual runs only. TEST_POST_ID rebuilds one
+          # specific post; DRY_RUN logs payloads without touching Discord.
+          TEST_POST_ID: ${{ github.event.inputs.test_post }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'yes' }}
+          # OPTIONAL switches (repo Variables, all work with no Variable set):
+          # DISCOHOOK_PREVIEW  — '0' disables the per-card Discohook preview link
+          # REDDIT_OP_COMMENT  — '0' hides the OP-comment line (FULL MODE)
+          # YOUTUBE_MEDIA_EMBED — '1' also tries to PLAY youtube links (seaof.glass);
+          #                       default = thumbnail + spark button only
+          # FEEDTOKEN_JSON_STAGGER — seconds to wait between feed-token .json attempts
+          # DISCOHOOK_PREVIEW: ${{ vars.DISCOHOOK_PREVIEW }}
+          # REDDIT_OP_COMMENT: ${{ vars.REDDIT_OP_COMMENT }}
+          # YOUTUBE_MEDIA_EMBED: ${{ vars.YOUTUBE_MEDIA_EMBED }}
+          # FEEDTOKEN_JSON_STAGGER: ${{ vars.FEEDTOKEN_JSON_STAGGER }}
           WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_: ${{ secrets.WEBHOOK_REDDIT_ZENLESSZONEZEROLEAKS_ }}
           WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS: ${{ secrets.WEBHOOK_REDDIT_GENSHIN_IMPACT_LEAKS }}
           WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS: ${{ secrets.WEBHOOK_REDDIT_HONKAISTARRAIL_LEAKS }}
