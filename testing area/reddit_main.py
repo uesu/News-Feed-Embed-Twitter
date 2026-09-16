@@ -36,7 +36,7 @@
 #         fallback lottery tickets.
 #
 # To use rich Components V2 version (V2 requires an EmbedEZ API key)
-# change the workflow run line to: python reddit_main_v2.py or 
+# change the workflow run line to: python reddit_main_v2_embedez.py or 
 # reddit_mainv3.py (Does not require API)
 # ---------------------------------------------------------------------------
 import os
