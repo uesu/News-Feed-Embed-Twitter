@@ -375,6 +375,134 @@ def _subreddit_by_name(name: str) -> str | None:
     return None
 
 
+# Arctic Shift is an optional archive, not a live Reddit API. Missing posts,
+# stale records, malformed responses and outages must leave existing fallbacks usable.
+ARCTIC_POSTS_URL = "https://arctic-shift.photon-reddit.com/api/posts/ids"
+_arctic_fail_count = 0
+
+
+async def fetch_arctic_post(session, post_id: str, label: str = "") -> dict | None:
+    global _arctic_fail_count
+    if not re.fullmatch(r"[a-z0-9]+", post_id or "") or _arctic_fail_count >= 3:
+        return None
+    try:
+        async with session.get(ARCTIC_POSTS_URL, params={"ids": post_id},
+                               headers=dict(BROWSER_HEADERS),
+                               timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status != 200:
+                raise ValueError(f"HTTP {resp.status}")
+            data = await resp.json(content_type=None)
+        posts = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(posts, list):
+            raise ValueError("invalid archive response")
+        _arctic_fail_count = 0
+        # Empty results are normal for posts not yet archived. Match the ID,
+        # rather than accidentally attaching another post's media.
+        return next((post for post in posts if isinstance(post, dict)
+                     and post.get("id") == post_id), None)
+    except Exception as exc:
+        _arctic_fail_count += 1
+        logging.info(f"[{label or post_id}] Arctic Shift unavailable: {exc}")
+        return None
+
+
+def arctic_crosspost_orig(post) -> dict | None:
+    parents = post.get("crosspost_parent_list") if isinstance(post, dict) else None
+    if isinstance(parents, list) and parents and isinstance(parents[0], dict):
+        return parents[0]
+    return None
+
+
+def arctic_video_info(post) -> tuple:
+    """Candidate video URL; the existing resolver must still validate it.
+
+    Reddit fallback_url is NOT guaranteed to include audio.
+    """
+    media = post.get("media") if isinstance(post, dict) else None
+    video = media.get("reddit_video") if isinstance(media, dict) else None
+    url = video.get("fallback_url") if isinstance(video, dict) else None
+    if not isinstance(url, str) or not re.match(r"https://v\.redd\.it/", url):
+        return None, None
+    return extract_vreddit_id(url), html_lib.unescape(url)
+
+
+def arctic_gallery_items(post) -> list:
+    if not isinstance(post, dict):
+        return []
+    gallery = post.get("gallery_data")
+    metadata = post.get("media_metadata")
+    if not isinstance(gallery, dict) or not isinstance(metadata, dict):
+        return []
+    items = gallery.get("items")
+    if not isinstance(items, list):
+        return []
+    out = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("is_deleted"):
+            continue
+        key = item.get("media_id")
+        meta = metadata.get(key) if isinstance(key, str) else None
+        if not isinstance(meta, dict) or meta.get("status") not in (None, "valid"):
+            continue
+        src = meta.get("s")
+        if not isinstance(src, dict):
+            continue
+        animated = meta.get("e") == "AnimatedImage" or meta.get("m") == "image/gif"
+        url = src.get("gif" if animated else "u")
+        if not isinstance(url, str) or not url.startswith("https://"):
+            continue
+        url = html_lib.unescape(url)
+        if not animated:
+            match = re.fullmatch(r"https://(?:i|preview)\.redd\.it/([\w.-]+\.jpe?g)",
+                                 url.split("?", 1)[0], re.I)
+            if match:
+                url = f"https://i.redd.it/{_reddit_media_key(match.group(1))}"
+        out.append({"kind": "gif" if animated else "image", "url": url})
+    return out
+
+
+def _clean_author_name(value) -> str:
+    for line in reversed(str(value or "").splitlines()):
+        candidate = re.sub(r"\]\(.*$", "", line).strip(" []*")
+        candidate = re.sub(r"^(?:submitted\s+)?by\)?\s+", "", candidate, flags=re.I)
+        candidate = re.sub(r"^/?u/", "", candidate)
+        if re.fullmatch(r"[A-Za-z0-9_-]{2,25}", candidate):
+            return candidate
+    return "unknown"
+
+
+def _clean_post_title(value) -> str:
+    title = str(value or "").strip()
+    # Only the observed appended byline artifact, not legitimate title punctuation.
+    title = re.sub(r"\]\(https?://[^\n]*\)\s*\n\*?by.*$", "", title, flags=re.S)
+    return re.sub(r"\s+", " ", title)[:400]
+
+
+def _clean_plain_body(text) -> str:
+    if text in ("[removed]", "[deleted]"):
+        return ""
+    return _collapse_blanks(_line_stage([line.strip() for line in str(text or "").splitlines()]))
+
+
+def _drop_youtube_line(body: str, youtube_url: str | None) -> str:
+    video_id, _ = extract_youtube_id(youtube_url)
+    if not video_id:
+        return body
+    kept = []
+    for line in body.splitlines():
+        candidate = line.strip()
+        link = re.fullmatch(r"\[([^\]]+)\]\((https?://[^\s]+)\)", candidate)
+        # Only remove URL-labelled links, not descriptive links in prose.
+        if link and link.group(1) == link.group(2):
+            candidate = link.group(2)
+        if re.fullmatch(r"https?://\S+", candidate):
+            other_id, _ = extract_youtube_id(candidate)
+            if other_id == video_id:
+                continue
+        kept.append(line)
+    return _collapse_blanks(kept)
+
+
 def strip_html(value: str | None) -> str:
     """Removes tags from HTML-ish strings (used for JSON selftext etc.)."""
     if not value:
@@ -384,6 +512,62 @@ def strip_html(value: str | None) -> str:
     value = html_lib.unescape(value)
     return re.sub(r"\s{2,}", " ", value).strip()
 
+
+
+def repair_mangled_link_lines(lines: list) -> list:
+    """Repair only paired Word](url) / Word) rest feed artifacts.
+
+    Never consume an intact Markdown link or borrow an unrelated URL.
+    """
+    out = []
+    i = 0
+    while i < len(lines):
+        tail = re.fullmatch(r"([^\s\[\]]+)\]\(https?://[^\s]*?\)?", lines[i])
+        if tail and i + 1 < len(lines):
+            word = tail.group(1)
+            if lines[i + 1].startswith(word + ")"):
+                rest = lines[i + 1][len(word) + 1:]
+                opener = re.search(r"\[(https?://[^\s\[\]]+)$", rest)
+                if opener:
+                    url = opener.group(1)
+                    rest = rest[:opener.start()] + f"[{url}]({url})"
+                out.append(word + rest)
+                i += 2
+                continue
+        out.append(lines[i])
+        i += 1
+    return out
+
+
+def _collapse_blanks(lines: list) -> str:
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip("\n")
+
+
+def _line_stage(lines: list) -> list:
+    """Drop recognizable feed navigation/footer artifacts, not prose."""
+    kept = []
+    for line in repair_mangled_link_lines(lines):
+        if line.lower() in ("link", "comments", "[link]", "[comments]", "permalink"):
+            continue
+        if re.match(r"^submitted\)?\s+by\s+\[?\s*/?u/", line, re.I):
+            continue
+        # merged linked footer on ONE line ("[](url) submitted by [/u/x](url)
+        # to [r/y](url)") — the feed emits it merged, so an anchored rule misses it
+        if re.search(r"submitted\s+by\s+\[?\s*/?u/", line, re.I):
+            continue
+        if re.fullmatch(r"\[\s*\]\]?\(https?://\S+\)", line):
+            continue
+        if re.fullmatch(r"[^\s\[\]]+\]\(https?://\S+?\)?", line):
+            continue
+        if re.fullmatch(r"\[https?://[^\s\[\]]+", line):
+            continue
+        line = re.sub(r"\[[^\]]*\]\(https?://v\.redd\.it/[^\s)]*\)", "", line)
+        line = re.sub(r"https?://v\.redd\.it/[^\s<>\])]*", "", line)
+        line = re.sub(r"[ \t]{2,}", " ", line).strip()
+        if re.fullmatch(r"https?://[^\s\[\]]+", line):
+            line = f"[{line}]({line})"
+        kept.append(line)
+    return kept
 
 def clean_rss_body(value: str | None) -> str:
     """
@@ -403,7 +587,7 @@ def clean_rss_body(value: str | None) -> str:
     text = re.sub(r"(?i)<span>\s*<a[^>]*>\[(?:link|comments)\]</a>\s*</span>", " ", text)
     # links stay clickable: <a href="U">T</a> -> [T](U)
     text = re.sub(r'(?is)<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r'[\2](\1)', text)
-    text = re.sub(r"(?i)<\s*(br|/p|/div|/li|/table|/tr|/td|h[1-6])[^>]*>", "\n", text)
+    text = re.sub(r"(?i)<\s*(br|p\b|/p|/div|/li|/table|/tr|/td|h[1-6])[^>]*>", "\n", text)
     text = re.sub(r"(?i)<img[^>]*>", " ", text)
     text = re.sub(r"<[^>]+>", " ", text)
     text = html_lib.unescape(text)
@@ -415,10 +599,7 @@ def clean_rss_body(value: str | None) -> str:
     # RSS nav leftovers that survived as markdown links: [link](…) [comments](…)
     text = re.sub(r"(?i)\[(?:link|comments)\]\(\s*[^\s)]*\s*\)", " ", text)
     lines = [re.sub(r"\s{2,}", " ", ln).strip() for ln in text.splitlines()]
-    lines = [ln for ln in lines if ln]
-    # leftover [link]/[comments] nav labels (RSS / redlib footers)
-    lines = [ln for ln in lines if ln.lower() not in ("link", "comments", "[link]", "[comments]")]
-    return "\n".join(lines)
+    return _collapse_blanks(_line_stage(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -958,8 +1139,8 @@ def base_from_redlib_page(page_html: str | None, path: str) -> dict | None:
     og = (re.search(r'property="og:image"\s+content="([^"]+)"', page_html, re.I) or
           re.search(r'content="([^"]+)"\s+property="og:image"', page_html, re.I))
     return {
-        "title": title[:400],
-        "author": author,
+        "title": _clean_post_title(title),
+        "author": _clean_author_name(author),
         "content_html": area,
         "thumb": og.group(1) if og else None,
         "body": clean_rss_body(area),
@@ -1136,8 +1317,8 @@ def entry_to_base_data(entry) -> dict:
     if author.startswith("/u/"):
         author = author[3:]
     return {
-        "title": str(getattr(entry, "title", "") or "")[:400],
-        "author": author or "unknown",
+        "title": _clean_post_title(getattr(entry, "title", "")),
+        "author": _clean_author_name(author),
         "content_html": content_html,
         "thumb": thumb,
         "body": clean_rss_body(content_html),
@@ -1286,6 +1467,31 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
         logging.info(f"[{label or 'native'}] crosspost — media/stats from the "
                      f"original post {fetch_path}")
 
+    # Resolve archive crossposts BEFORE asking proxies for media. Keep the
+    # crosspost thread/title/author on the card; media comes from its original.
+    arctic = None
+    if not post_json and fetch_path:
+        arctic = await fetch_arctic_post(session, extract_post_id(fetch_path) or "", label)
+        original = arctic_crosspost_orig(arctic)
+        if original and not crosspost:
+            original_path = original.get("permalink")
+            if (isinstance(original_path, str)
+                    and re.fullmatch(r"/r/[^/]+/comments/[a-z0-9]+/[^?#]*", original_path)):
+                fetch_path = original_path
+                crosspost = {"url": f"https://www.reddit.com{fetch_path}", "path": fetch_path}
+                arctic = original
+                logging.info(f"[{label}] crosspost detected via Arctic Shift: {fetch_path}")
+    arctic_items = arctic_gallery_items(arctic)
+    a_vid, a_fb = arctic_video_info(arctic)
+    arctic_is_video = bool(a_vid)
+    if a_vid:
+        vid, fallback_url = a_vid, a_fb
+        has_video = True
+    # Structured text wins over flattened og descriptions. Archive text is
+    # used only when the RSS/redlib body is empty.
+    if arctic and not (body or "").strip():
+        body = _clean_plain_body(arctic.get("selftext"))
+
     # ---- round 13: PROXY media services (native mode only) ---------------
     # redditez.com -> vxreddit.com -> embeddit.deltandy.me, in that priority
     # order (see testing area/reddit_proxy.py). The winning service's own
@@ -1331,8 +1537,8 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
 
             def _use_proxy_text():
                 nonlocal stats, body
-                stats = proxy.get("stats")
-                if proxy.get("body"):
+                stats = proxy.get("stats") or stats
+                if proxy.get("body") and not (body or "").strip():
                     body = proxy["body"][:MAX_BODY_CHARS]
 
             video_dead = bool(proxy_video) and not video_ok
@@ -1344,7 +1550,12 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                 proxy_media_used = True
                 logging.info(f"[{label or 'proxy'}] card media via {proxy['service']} "
                              f"— 1 video tile.")
-            elif (not video_dead and redlib_items
+            elif (not video_dead and not arctic_is_video and arctic_items
+                  and len(arctic_items) >= max(1, len(proxy_images))):
+                media = [dict(item) for item in arctic_items]
+                _use_proxy_text()
+                proxy_media_used = True
+            elif (not video_dead and not arctic_is_video and redlib_items
                   and len(redlib_items) >= max(1, len(proxy_images))):
                 # image post: the COMPLETE ordered gallery from the redlib
                 # harvest — it lists EVERY item incl. GIFs (the redditez og
@@ -1356,7 +1567,7 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                 logging.info(f"[{label or 'proxy'}] card media via redlib harvest "
                              f"— {len(media)} item(s) (body/stats via "
                              f"{proxy['service']}).")
-            elif not video_dead and proxy_images:
+            elif not video_dead and not arctic_is_video and proxy_images:
                 media = proxy_images
                 _use_proxy_text()
                 proxy_media_used = True
@@ -1378,6 +1589,10 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                     logging.info(f"[{label or 'stats'}] stats via embeddit — {stats}")
             except Exception as e:
                 logging.info(f"[{label or 'stats'}] embeddit stats fetch failed: {e}")
+
+    if stats is None and arctic and all(isinstance(arctic.get(key), int)
+                                      for key in ("ups", "num_comments")):
+        stats = {"ups": arctic["ups"], "comments": arctic["num_comments"], "archived": True}
 
     # ---- VIDEO FIRST (round 12): the tile is the video, never a dup thumb
     video_url = None
@@ -1406,7 +1621,9 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                 # filled the gallery — a shorter redlib/RSS list must never
                 # downgrade it. The `not media` fallbacks below still run
                 # when the winning branch produced an empty list.
-                if redlib_items:
+                if arctic_items:
+                    media = [dict(item) for item in arctic_items]
+                elif redlib_items:
                     # round 14: the COMPLETE ordered gallery (incl. GIFs,
                     # full-res i.redd.it) from the parallel redlib harvest —
                     # takes priority over the RSS content (which omits
@@ -1469,10 +1686,11 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
             if not any(x["kind"] == "image" for x in media):
                 media.append({"kind": "image", "url": yt_thumb})
 
+    body = _drop_youtube_line(body, yt_url)
     media = media[:MAX_GALLERIES * MEDIA_PER_GALLERY]
     return {
         "title": title,
-        "author": author,
+        "author": _clean_author_name(author),
         "body": body[:MAX_BODY_CHARS] + ("…" if len(body) > MAX_BODY_CHARS else ""),
         "media": media,
         "stats": stats,
@@ -1512,7 +1730,7 @@ def build_v3_payload(subreddit: str, data: dict, reddit_url: str, posted_ts: int
         container 2: divider / gallery(rest) / stats / divider / buttons
     (Discord: 10 items per gallery, 10 components per container, 40 total.)
     """
-    header = f"### [{data['title']}]({reddit_url})\n*by {data['author']} in r/{subreddit}*"
+    header = f"### [{_clean_post_title(data['title'])}]({reddit_url})\n*by {_clean_author_name(data['author'])} in r/{subreddit}*"
     if data["crosspost"]:
         header += f"\n*🔁 Crosspost of {data['crosspost']['url']}*"
 
@@ -1521,6 +1739,8 @@ def build_v3_payload(subreddit: str, data: dict, reddit_url: str, posted_ts: int
     ts_suffix = f"   •   🕐 <t:{posted_ts}:f>"
     if stats:
         stats_line = f"-# 💬 {stats['comments']} 👍 {stats['ups']}{ts_suffix}"
+        if stats.get("archived"):
+            stats_line += " · archived counts"
     else:
         stats_line = f"-# 🕐 <t:{posted_ts}:f>"
 
@@ -1742,8 +1962,8 @@ async def main():
                 if post_json:
                     st = str(post_json.get("selftext") or "")
                     base = {
-                        "title": str(post_json.get("title") or "")[:400],
-                        "author": str(post_json.get("author") or "unknown"),
+                        "title": _clean_post_title(post_json.get("title")),
+                        "author": _clean_author_name(post_json.get("author")),
                         "content_html": st,
                         "thumb": None,
                         "body": strip_html(st),
@@ -1766,8 +1986,8 @@ async def main():
                                                                     health=_proxy_health)
                         if proxy and proxy.get("title"):
                             base = {
-                                "title": str(proxy["title"])[:400],
-                                "author": proxy.get("author") or "unknown",
+                                "title": _clean_post_title(proxy["title"]),
+                                "author": _clean_author_name(proxy.get("author")),
                                 "content_html": proxy.get("body") or "",
                                 "thumb": None,
                                 "body": proxy.get("body") or "",
