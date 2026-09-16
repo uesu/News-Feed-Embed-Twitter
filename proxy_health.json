@@ -1,6 +1,18 @@
 {
-  "ts": 0,
-  "post": null,
-  "services": {},
-  "note": "Placeholder committed with round 13 so the workflow's `git add -f proxy_health.json` never fails even before the first warm-up (or when PROXY_MEDIA=0). Overwritten by the per-run proxy warm-up."
+  "ts": 1789522149,
+  "post": "HonkaiStarRail_leaks/1whbjbh",
+  "services": {
+    "redditez": {
+      "ok": true,
+      "detail": "1 media item(s)"
+    },
+    "vxreddit": {
+      "ok": true,
+      "detail": "1 media item(s)"
+    },
+    "embeddit": {
+      "ok": true,
+      "detail": "1 media item(s)"
+    }
+  }
 }
