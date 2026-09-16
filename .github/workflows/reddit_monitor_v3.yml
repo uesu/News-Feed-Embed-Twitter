@@ -91,7 +91,7 @@ jobs:
         #       run: python reddit_main_v2.py   <- rich card (EmbedEZ key)
         #       run: python reddit_main_v3.py   <- rich card (native media, no key)
         # ───────────────────────────────────────────────────────────────────
-        run: python "testing area/reddit_main_v3test.py"   # ← V3 (native media, no EmbedEZ)
+        run: python "testing area/reddit_main_v3test.py"   # ← V3 (proxy media + native fallback)
 
       - name: Commit and push updated caches (posted_reddit.json + proxy_health.json)
         run: |
