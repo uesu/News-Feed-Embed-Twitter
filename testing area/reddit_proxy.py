@@ -75,7 +75,23 @@ VXREDDIT_STATS_RE = re.compile(r"u/(\S+) on r/(\S+) - ⬆️ (\d+)(?: \| 💬 (\
 EMBEDDIT_BASE = os.getenv("EMBEDDIT_INSTANCE", "https://embeddit.deltandy.me").rstrip("/")
 EMBEDDIT_ENCODE_CHARS = "1234567890abcdefghijklmnopqrstuvwxyz"
 # Footer line inside the content HTML: "⬆️ 305 • 💬 21"
-EMBEDDIT_STATS_RE = re.compile(r"⬆️ (\d[\d,]*) • 💬 (\d[\d,*])")
+# (compact numbers occur too: "⬆️ 1.1K • 💬 108")
+EMBEDDIT_STATS_RE = re.compile(
+    r"⬆️ (\d[\d,]*(?:\.\d+)?[KkMm]?) • 💬 (\d[\d,]*(?:\.\d+)?[KkMm]?)")
+
+
+def _compact_int(s: str) -> int:
+    """'1.1K' -> 1100, '2M' -> 2000000, '1,234' -> 1234, '57' -> 57."""
+    s = (s or "").strip().replace(",", "")
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([KkMm])?", s)
+    if not m:
+        return 0
+    n = float(m.group(1))
+    if m.group(2):
+        n *= 1_000_000 if m.group(2).upper() == "M" else 1_000
+    return int(n)
+
+
 # account.display_name = "u/<author> (@ r/<subreddit>)"
 EMBEDDIT_AUTHOR_RE = re.compile(r"u/(\S+) \(@ (r/[^\s)]+)")
 
@@ -132,8 +148,13 @@ def _og_meta(page_html: str) -> dict:
         cm = re.search(r'content="([^"]*)"', tag)
         if not (pm and cm):
             continue
-        key = html_lib.unescape(pm.group(1)).strip().lower()
-        val = html_lib.unescape(cm.group(1)).strip()
+        key = pm.group(1).strip().lower()
+        val = cm.group(1).strip()
+        for _ in range(3):  # unescape until stable (double-escaped pages)
+            k2, v2 = html_lib.unescape(key), html_lib.unescape(val)
+            if (k2, v2) == (key, val):
+                break
+            key, val = k2, v2
         if key == "og:image":
             meta.setdefault("og:image", []).append(val)
         else:
@@ -147,6 +168,34 @@ def _strip_html(value) -> str:
     text = re.sub(r"(?i)<br\s*/?>", "\n", value)
     text = re.sub(r"<[^>]+>", " ", text)
     text = html_lib.unescape(text)
+    lines = [re.sub(r"\s{2,}", " ", ln).strip() for ln in text.splitlines()]
+    return "\n".join(ln for ln in lines if ln)
+
+
+_BLOCK_BOUNDARY_RE = re.compile(r"(?i)</?(?:p|div|li|tr|table|h[1-6]|blockquote|ul|ol)\b[^>]*>")
+
+
+def clean_proxy_body(value) -> str:
+    """selftext/og:description HTML -> clean Discord-markdown card text:
+      • <a href="URL">text</a>  ->  [text](URL)   (links stay clickable)
+      • <b>/<strong>            ->  **bold**
+      • paragraph/list/heading boundaries -> real newlines
+      • redd.it media links ([text](url)) and BARE redd.it URLs are removed
+        — the media already sits in the gallery, not in the text (fixes the
+        "...s=cd816…dc0Seems like the..." glued-URL artifact)
+    """
+    if not value:
+        return ""
+    text = re.sub(r'(?is)<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r'[\2](\1)', value)
+    text = re.sub(r"(?is)<(?:b|strong)\s*>(.*?)</(?:b|strong)>", r"**\1**", text)
+    text = _BLOCK_BOUNDARY_RE.sub("\n", text)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    # redd.it media link -> gone (gallery has the image)
+    text = re.sub(r"\[[^\]]*\]\(\s*https?://(?:i\.|preview\.|external-preview\.)?redd\.it/[^\s)]*\s*\)", " ", text)
+    # bare redd.it URL -> gone (but never touch a markdown link target)
+    text = re.sub(r"(?<!\]\()https?://(?:i\.|preview\.|external-preview\.)?redd\.it/[^\s<>)\]]+(?!\))", " ", text)
     lines = [re.sub(r"\s{2,}", " ", ln).strip() for ln in text.splitlines()]
     return "\n".join(ln for ln in lines if ln)
 
@@ -172,6 +221,50 @@ def parse_redditez_search(data: dict):
     return None
 
 
+def _media_file_key(url: str):
+    """reddit file ID for an i.redd.it / preview.redd.it URL -> 'id.ext'
+    (slug-v0 prefix removed), None for any other URL (e.g. embedez
+    redirects, which carry no file id)."""
+    m = re.match(r"https?://(?:i|preview)\.redd\.it/([\w.-]+\.(?:jpe?g|png|gif|webp))",
+                 url or "", re.I)
+    if not m:
+        return None
+    return re.sub(r"^.+-v\d+-", "", m.group(1).lower())
+
+
+def dedupe_proxy_media(media: list) -> list:
+    """Drops the duplicate gallery items the proxy embed pages add:
+      1. the SAME reddit file id twice (same photo via a different
+         CDN/rendition — e.g. [2pnv1.jpeg, 2pnv1.jpeg])
+      2. a 140px feed-crop thumbnail item (width=140 / crop=1:1)
+      3. the extra 'main image' tag: the page appends ONE more og:image
+         (the post's main photo) after the N real media items — e.g.
+         [embedez.0, embedez.1, embedez.2, i.redd.it/<main photo>]
+    """
+    if len(media) <= 1:
+        return list(media)
+    out = []
+    seen = set()
+    for m in media:
+        k = _media_file_key(m.get("url", ""))
+        if k:
+            if k in seen:
+                continue
+            seen.add(k)
+        out.append(m)
+    # 2: 140px feed-crop thumbnails are never real media
+    out = [m for m in out
+           if not (re.search(r"(?:[?&]width=140\b|[?&]height=140\b)", m.get("url", ""))
+                   or "crop=1:1" in m.get("url", ""))]
+    # 3: trailing 'main image' duplicate (N embedez redirects + 1 redd.it tag)
+    n_redirects = sum(1 for m in out
+                      if "embedez.com/api/v2/redirect" in m.get("url", ""))
+    if (len(out) >= 2 and n_redirects >= 1 and len(out) == n_redirects + 1
+            and _media_file_key(out[-1].get("url", ""))):
+        out = out[:-1]
+    return out
+
+
 def parse_embeddit_post(data: dict):
     """Embeddit /api/v1/statuses JSON -> normalized dict (or None).
     Normalized shape (shared by all three services):
@@ -187,19 +280,46 @@ def parse_embeddit_post(data: dict):
     if dm:
         author = dm.group(1)
         subreddit = dm.group(2)[2:]
-    text = _strip_html(data.get("content") or "")
-    lines = [ln for ln in text.splitlines() if ln]
-    title = lines[0] if lines else None
-    body_lines = lines[1:]
+    content = data.get("content") or ""
+    title = None
+    body_lines = []
     stats = None
-    if body_lines:
-        fm = EMBEDDIT_STATS_RE.search(body_lines[-1])
+    tm = re.search(r"(?is)<a\s[^>]*>\s*<b>(.*?)</b>\s*</a>", content)
+    if tm:
+        # markdown-rendered shape: <a><b>title</b></a> link first, then the
+        # body in <br>/<div> blocks, then a <b>⬆️ N • 💬 M</b> stats footer
+        title = html_lib.unescape(tm.group(1)).strip()
+        text = clean_proxy_body(content)
+        lines = [ln for ln in text.splitlines() if ln]
+        body_lines = lines[1:]  # line 1 is the [title](permalink) link
+        if body_lines:
+            fm = EMBEDDIT_STATS_RE.search(body_lines[-1])
+            if fm:
+                stats = {
+                    "ups": _compact_int(fm.group(1)),
+                    "comments": _compact_int(fm.group(2)),
+                }
+                body_lines = body_lines[:-1]  # it becomes the stats row
+    else:
+        # plain-text shape (no anchor) — everything glued on one line:
+        # "Titlehttps://v.redd.it/…⬆️ N • 💬 M" (live: 1wfz61f, 1wgjk4a)
+        plain = html_lib.unescape(re.sub(r"(?i)<br\s*/?>", "\n", content))
+        plain = re.sub(r"<[^>]+>", " ", plain)
+        fm = EMBEDDIT_STATS_RE.search(plain)
         if fm:
             stats = {
-                "ups": int(fm.group(1).replace(",", "")),
-                "comments": int(fm.group(2).replace(",", "")),
+                "ups": _compact_int(fm.group(1)),
+                "comments": _compact_int(fm.group(2)),
             }
-            body_lines = body_lines[:-1]
+            plain = plain[:fm.start()].rstrip()
+        # bare media/video URLs glued to the text -> gone (the media sits in
+        # the gallery / video tile)
+        plain = re.sub(r"https?://[^\s<>]+", " ", plain)
+        body_lines = [re.sub(r"\s{2,}", " ", ln).strip()
+                      for ln in plain.splitlines()]
+        body_lines = [ln for ln in body_lines if ln]
+        title = body_lines[0] if body_lines else None
+        body_lines = body_lines[1:]
     media = []
     for att in data.get("media_attachments") or []:
         url = att.get("url") if isinstance(att, dict) else None
@@ -275,18 +395,23 @@ async def _fetch_redditez(session, path: str, label: str = ""):
                          f"failure — next service will be tried.")
             return None
         meta = _og_meta(page)
-        media = _media_from_og(meta)
+        media = dedupe_proxy_media(_media_from_og(meta))
         if not media and not meta.get("og:title"):
             logging.info(f"[{label}] redditez embed page had no usable media.")
             return None
         stats = (parse_icon_stats(meta.get("og:site_name") or "")
                  or parse_icon_stats(meta.get("og:description") or ""))
+        body = clean_proxy_body(meta.get("og:description") or "")
+        # when the post has no selftext the page puts the icon-stats string
+        # in og:description — that is not a body
+        if STATS_ICONS_RE.search(body):
+            body = ""
         return {
             "service": "redditez",
             "title": meta.get("og:title"),
             "author": None,
             "subreddit": None,
-            "body": _strip_html(meta.get("og:description") or ""),
+            "body": body,
             "stats": stats,
             "media": media,
         }
@@ -318,7 +443,7 @@ async def _fetch_vxreddit(session, path: str, label: str = ""):
                          f"next service will be tried.")
             return None
         meta = _og_meta(page)
-        media = _media_from_og(meta)
+        media = dedupe_proxy_media(_media_from_og(meta))
         stats = None
         author = None
         sm = VXREDDIT_STATS_RE.search(meta.get("og:site_name") or "")
@@ -333,7 +458,7 @@ async def _fetch_vxreddit(session, path: str, label: str = ""):
             "title": meta.get("og:title"),
             "author": author,
             "subreddit": None,
-            "body": _strip_html(meta.get("og:description") or ""),
+            "body": clean_proxy_body(meta.get("og:description") or ""),
             "stats": stats,
             "media": media,
         }
@@ -368,6 +493,15 @@ async def _fetch_embeddit(session, path: str, label: str = ""):
     if not result:
         logging.info(f"[{label}] embeddit returned no parseable post data.")
     return result
+
+
+async def fetch_embeddit_stats(session, path: str, label: str = ""):
+    """Lightweight stats fetch via the Embeddit JSON (no bot gate, ~1 s).
+    Used when the winning proxy service did not provide stats — the
+    redditez og page often lacks the stats line. Returns
+    {"ups": N, "comments": M} or None."""
+    result = await _fetch_embeddit(session, path, label or "stats")
+    return result.get("stats") if result else None
 
 
 # ---------------------------------------------------------------------------

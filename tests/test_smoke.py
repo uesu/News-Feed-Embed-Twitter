@@ -349,6 +349,97 @@ with tempfile.TemporaryDirectory() as _td:
     check("proxy: missing health file -> {}", proxy.load_proxy_health() == {})
 proxy.PROXY_HEALTH_FILE = orig_health_file
 
+# ---- 8. round 14: body formatting, og dedupe, crosspost -------------------
+# 8.1 clean_proxy_body: markdown links + bold + paragraph breaks + URL strip
+html_body = ('<a href="https://en.wikipedia.org/wiki/Heist">BGM: Heist</a> more text<br/>'
+             '<b>bold line</b><p><a href="https://i.redd.it/abc123.png?s=1">img</a></p>'
+             'plain https://preview.redd.it/xyz-v0-def456.jpg?width=140&s=2 end')
+cb = proxy.clean_proxy_body(html_body)
+check("r14 body: markdown link kept",
+      "[BGM: Heist](https://en.wikipedia.org/wiki/Heist)" in cb, cb)
+check("r14 body: bold kept as **bold**", "**bold line**" in cb, cb)
+check("r14 body: paragraph breaks kept", "\n" in cb, cb)
+check("r14 body: redd.it media links+URLs removed", "redd.it" not in cb, cb)
+check("r14 body: surrounding text kept", "more text" in cb and "end" in cb, cb)
+
+# 8.2 _og_meta: double-escaped values unescape to stable
+meta2 = proxy._og_meta('<html><head><meta property="og:title" content="A &amp;amp; B"/></head></html>')
+check("r14 og: double-escape unescaped", meta2.get("og:title") == "A & B", str(meta2.get("og:title")))
+
+# 8.3 dedupe_proxy_media (the 4 duplicate shapes from the 2026-09-16 run)
+dm = proxy.dedupe_proxy_media
+check("r14 dedupe: single item untouched",
+      dm([{"kind": "image", "url": "https://i.redd.it/solo.jpg"}])
+      == [{"kind": "image", "url": "https://i.redd.it/solo.jpg"}])
+check("r14 dedupe: same file id collapsed",
+      dm([{"kind": "image", "url": "https://i.redd.it/aaaa.jpg"},
+          {"kind": "image", "url": "https://i.redd.it/aaaa.jpg"}])
+      == [{"kind": "image", "url": "https://i.redd.it/aaaa.jpg"}])
+check("r14 dedupe: 140px crop dropped",
+      dm([{"kind": "image", "url": "https://i.redd.it/aaaa.jpg"},
+          {"kind": "image", "url": "https://preview.redd.it/s-v0-bbbb.jpg?width=140&crop=1:1,smart&s=1"}])
+      == [{"kind": "image", "url": "https://i.redd.it/aaaa.jpg"}])
+check("r14 dedupe: trailing main-image tag dropped (1wguffh shape)",
+      dm([{"kind": "image", "url": "https://embedez.com/api/v2/redirect/6633670e/1"},
+          {"kind": "image", "url": "https://embedez.com/api/v2/redirect/6633670e/2"},
+          {"kind": "image", "url": "https://embedez.com/api/v2/redirect/6633670e/3"},
+          {"kind": "image", "url": "https://i.redd.it/heist-mode-v0-qw19p2v3g8uh1.jpg"}])
+      == [{"kind": "image", "url": "https://embedez.com/api/v2/redirect/6633670e/1"},
+          {"kind": "image", "url": "https://embedez.com/api/v2/redirect/6633670e/2"},
+          {"kind": "image", "url": "https://embedez.com/api/v2/redirect/6633670e/3"}])
+check("r14 dedupe: vN- slug variants of same id collapsed",
+      dm([{"kind": "image", "url": "https://i.redd.it/heist-mode-v0-qw19p2v3g8uh1.jpg"},
+          {"kind": "image", "url": "https://preview.redd.it/qw19p2v3g8uh1.jpg?width=1080&s=1"}])
+      == [{"kind": "image", "url": "https://i.redd.it/heist-mode-v0-qw19p2v3g8uh1.jpg"}])
+
+# 8.4 clean_rss_body: clickable links kept, redd.it URLs gone, nav gone
+rss_html = ('<table><tr><td><p>Check <a href="https://example.com/x">this link</a> out</p>'
+            '<p>pic: https://i.redd.it/abcd1234efgh.jpg and '
+            '<a href="https://i.redd.it/abcd1234efgh.jpg">it</a></p>'
+            '<span>submitted by /u/x to r/y <a href="https://www.reddit.com/r/y/comments/1z/">link</a> '
+            '<a href="https://www.reddit.com/r/y/comments/1z/">comments</a></span>'
+            '</td></tr></table>')
+rb = v3.clean_rss_body(rss_html)
+check("r14 rss: non-redd.it link clickable", "[this link](https://example.com/x)" in rb, rb)
+check("r14 rss: redd.it URLs gone", "redd.it" not in rb, rb)
+check("r14 rss: [link]/[comments] nav gone",
+      "www.reddit.com" not in rb and "comments" not in rb, rb)
+
+# 8.5 crosspost detection
+cp = v3.find_crosspost_original_path
+check("r14 crosspost: detected in RSS content",
+      cp('<p>u/leak crossposted this from r/AnantaLeaks — '
+         '<a href="https://www.reddit.com/r/AnantaLeaks/comments/1wgjk4a/orig/">original post</a></p>',
+         "/r/Other/comments/1wabcdx/") == "/r/AnantaLeaks/comments/1wgjk4a/", "")
+check("r14 crosspost: no 'crosspost' marker -> None",
+      cp('<p>see <a href="https://www.reddit.com/r/X/comments/abc/">that post</a></p>') is None)
+check("r14 crosspost: own permalink excluded",
+      cp("crosspost /r/X/comments/abc/", "/r/X/comments/abc/") is None)
+check("r14 crosspost: plain-text permalink found",
+      cp("u/x crossposted this from r/Y — /r/AnantaLeaks/comments/1wgjk4a/x", None)
+      == "/r/AnantaLeaks/comments/1wgjk4a/", "")
+
+# 8.6 entry_to_base_data carries the crosspost field
+ce = _FakeEntry("/r/Other/comments/1wabcdx/slug/", "Crosspost title", "leak",
+                '<p>u/leak crossposted this from r/AnantaLeaks — '
+                '<a href="https://www.reddit.com/r/AnantaLeaks/comments/1wgjk4a/orig/">original post</a></p>')
+b3 = v3.entry_to_base_data(ce)
+check("r14 crosspost: base carries original path",
+      b3.get("crosspost_orig_path") == "/r/AnantaLeaks/comments/1wgjk4a/",
+      str(b3.get("crosspost_orig_path")))
+
+# 8.7 embeddit title from the <a><b>…</b></a> anchor
+edd2 = proxy.parse_embeddit_post({
+    "account": {"display_name": "u/A (@ r/B)"},
+    "content": ('<a href="https://reddit.com/r/B/comments/1abc/x/"><b>My &amp; title</b></a>'
+                '<br/><div>body line</div><br/><div><b>⬆️ 10 • 💬 2</b></div>'),
+    "media_attachments": [],
+})
+check("r14 embeddit: anchor title (plain, unescaped)",
+      edd2 and edd2["title"] == "My & title", str(edd2 and edd2.get("title")))
+check("r14 embeddit: body excludes title link + stats footer",
+      edd2 and edd2["body"] == "body line", str(edd2 and edd2.get("body")))
+
 print()
 if failures:
     print(f"SMOKE TEST FAILURES ({len(failures)}): {failures}")

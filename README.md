@@ -539,6 +539,42 @@ credits, no API key):
   relied on for posting) and [`docs/CI_SMOKE.md`](docs/CI_SMOKE.md)
   (ci.yml + test_smoke.py = the **required** offline safety gate).
 
+### 🆕 Reddit V3 — round 14 (2026-09-16): card polishing (after the first production runs)
+
+* **Complete galleries incl. GIFs:** the redlib post-page harvest now runs
+  **in parallel with the proxy fetch**, and for image posts the complete
+  ordered redlib list **wins over the proxy's og: list** — the redditez og:
+  tags omit GIFs (a 3-photo + 3-GIF post showed only the 3 photos before).
+  Video posts skip the harvest (their DASH chain handles them); when every
+  proxy is down the redlib list is still used. No extra time in normal runs
+  (the fetches run at the same time).
+* **No duplicate gallery items:** the redditez/vxreddit embed pages append
+  extra `og:image` tags (the post's "main image", a 140px feed crop, or the
+  same photo under a second CDN name). `dedupe_proxy_media` (in
+  `testing area/reddit_proxy.py`) drops: the same redd.it **file id**
+  (slug/`vN-` variants count as the same file), `width=140`/`crop=1:1`
+  crops, and the ONE trailing tag when a page emits N real media + 1 extra.
+* **Body text like the redditez card:** every link in the body is now a
+  clickable markdown link `[text](url)`, `**bold**` and paragraph breaks are
+  kept, and **bare redd.it media URLs are removed from the text** (the media
+  already sits in the gallery — fixes the glued
+  `…&s=…dc0Seems like the…` text). The og: content values are unescaped
+  until stable (fixes `&amp;amp;` in URLs).
+* **Crossposts keep working:** the crosspost notice in the RSS content
+  ("u/x crossposted this from r/Y — original post") is detected, and the
+  media + stats are fetched **from the ORIGINAL post** (a crosspost's own
+  pages carry no media — the run-2 crosspost degraded to a plain image
+  because vxreddit doesn't resolve crossposts). The card keeps the
+  crosspost URL and the "🔁 Crosspost of" line, as before.
+* **Missing stats on redditez cards:** the redditez og: page often has no
+  stats line (the stats live in the oembed, not the og: tags) — when the
+  winning proxy has no stats the bot backfills 💬/👍 from the **Embeddit
+  JSON** (one extra request, ~1 s, no bot gate).
+* **Embeddit plain-text shape handled:** posts without selftext arrive
+  unmarked-up ("Title⬆️ 1.1K • 💬 108" glued on one line, no `<a><b>`
+  title) — the parser now handles both shapes and compact numbers
+  (`1.1K` → 1100).
+
 ### 🧪 Reddit V3 — final testing & verification procedure (round 12)
 
 **Step 0 — one-time: archive the OLD Reddit V1/V2 workflow.**
@@ -1077,6 +1113,27 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 ## 🗒 Changelog
 
+* **2026-09-16 — round 14 (Reddit V3 card polishing, after the first
+  production runs):**
+  * **Complete galleries incl. GIFs** — the redlib post-page harvest now
+    runs in parallel with the proxy fetch and its complete ordered list
+    wins for image posts (redditez og: tags omit GIFs; a 6-item post showed
+    3 before). Video posts skip the harvest; all-proxies-down still gets
+    the redlib list.
+  * **Gallery dedupe** — the proxy embed pages' extra `og:image` tags (the
+    "main image", 140px crops, same-photo second rendition) are dropped by
+    the new `dedupe_proxy_media` in `reddit_proxy.py`.
+  * **Body formatting like the redditez card** — clickable markdown links
+    for all links, `**bold**` + paragraph breaks kept, bare redd.it media
+    URLs removed from the text (fixes the glued-URL bug), og: values
+    unescaped until stable (fixes `&amp;amp;`).
+  * **Crossposts keep working** — the crosspost notice in the RSS content
+    is detected; media/stats are fetched from the ORIGINAL post; the card
+    keeps the crosspost URL + "🔁 Crosspost of" line.
+  * **Stats backfill** — when the winning proxy has no stats (common with
+    redditez), the 💬/👍 row is backfilled from the Embeddit JSON (~1 s).
+  * **Embeddit plain-text shape** — unmarked-up content ("Title⬆️ 1.1K
+    • 💬 108") and compact numbers are parsed.
 * **2026-09-16 — round 13 (Reddit V3 proxy media services + docs):**
   * **Proxy media path (native mode):** card media now comes FIRST from the
     public proxy services — **redditez.com (EmbedEZ) → vxreddit.com →
