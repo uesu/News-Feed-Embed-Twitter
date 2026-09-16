@@ -515,27 +515,111 @@ def strip_html(value: str | None) -> str:
 
 
 def repair_mangled_link_lines(lines: list) -> list:
-    """Repair only paired Word](url) / Word) rest feed artifacts.
+    """Repair the feed's mangled markdown-link pairs.
 
-    Never consume an intact Markdown link or borrow an unrelated URL.
+    A source line 'Word rest [U](U)' can arrive as a tail line
+    'Word](prev-url)' (the url may be doubled: 'Word](u)](u)'), the
+    post's own blank line, and a continuation 'Word) rest [U' or
+    'Word) rest [[U](U)' (the feed re-glues an extra '[' before the
+    link; the final line also gets a '](u)](u))' tail glued on).
+    Repairs:
+      * tail + continuation (at most one blank line between) ->
+        'Word rest [U](U)'; the url is the continuation's own link when
+        complete, else the next tail's url, else the opener's;
+      * leftover '[[U](U)' -> '[U](U)';
+      * an orphan continuation 'Word) rest [U](U)' whose tail was dropped
+        keeps the word: 'Word rest [U](U)';
+      * a pure tail line with no continuation is left for the junk filter.
     """
+    tail_re = re.compile(r"([^\s\[\]]+)\]\(https?://[^\s]*?\)?")
+    dbl_re = re.compile(r"\[\[(https?://[^\s\[\]]+)\]\((https?://[^\s\[\]]+)\)")
+    link_re = re.compile(r"\[(https?://[^\s\[\]]+)\]\((https?://[^\s\[\]]+)\)")
+    opener_re = re.compile(r"\[(https?://[^\s\[\]]+)$")
+    glue_re = re.compile(r"(?:\]?\(https?://[^\s\[\]]*\)?[\)\]]*)+$")
+
+    def _finish(rest, nxt):
+        rest = dbl_re.sub(r"[\1](\2)", rest)
+        m = link_re.search(rest)
+        if m:
+            before = rest[:m.start()].strip()
+            after = rest[m.end():].strip()
+            text = f"[{m.group(1)}]({m.group(2)})"
+            if before:
+                text = before + " " + text
+            if after and not glue_re.fullmatch(after):
+                text += " " + after
+            return text
+        um = opener_re.search(rest)
+        if um:
+            close = None
+            if nxt is not None:
+                nm = tail_re.fullmatch(nxt)
+                if nm:
+                    close = re.sub(r"\].*$", "", nm.group(0)[len(nm.group(1)) + 2:]).rstrip(")")
+            text = f"[{um.group(1)}]({close or um.group(1)})"
+            before = rest[:um.start()].strip()
+            if before:
+                text = before + " " + text
+            return text
+        return rest.rstrip()
+
     out = []
+    seen_tails = set()
     i = 0
-    while i < len(lines):
-        tail = re.fullmatch(r"([^\s\[\]]+)\]\(https?://[^\s]*?\)?", lines[i])
-        if tail and i + 1 < len(lines):
-            word = tail.group(1)
-            if lines[i + 1].startswith(word + ")"):
-                rest = lines[i + 1][len(word) + 1:]
-                opener = re.search(r"\[(https?://[^\s\[\]]+)$", rest)
-                if opener:
-                    url = opener.group(1)
-                    rest = rest[:opener.start()] + f"[{url}]({url})"
-                out.append(word + rest)
-                i += 2
+    n = len(lines)
+    while i < n:
+        tm = tail_re.fullmatch(lines[i])
+        if tm:
+            seen_tails.add(tm.group(1))
+        if tm and i + 1 < n:
+            word = tm.group(1)
+            j = i + 1
+            if lines[j] == "":
+                j += 1
+            if j < n and lines[j].startswith(word + ")"):
+                rest = lines[j][len(word) + 1:]
+                text = _finish(rest, lines[j + 1] if j + 1 < n else None)
+                merged = word
+                if text:
+                    if re.match(r"[A-Za-z0-9\[]", text[0]):
+                        merged += " " + text
+                    else:
+                        merged += text
+                out.append(merged.rstrip())
+                if j == i + 2:
+                    out.append("")
+                i = j + 1
                 continue
-        out.append(lines[i])
+        line = dbl_re.sub(r"[\1](\2)", lines[i])
+        cm = re.match(r"^(\S+)\)\s+(.*)$", line)
+        if cm and cm.group(1) in seen_tails and (link_re.search(line) or opener_re.search(line)):
+            line = cm.group(1) + " " + dbl_re.sub(r"[\1](\2)", cm.group(2)).strip()
+        out.append(line)
         i += 1
+    return out
+
+
+def _apply_quote_markers(lines: list) -> list:
+    """Round 16: \x01/\x02 blockquote markers -> Discord '> ' quote lines."""
+    out = []
+    quote = False
+    for ln in lines:
+        appended = False
+        had_markers = ("\x01" in ln) or ("\x02" in ln)
+        while "\x01" in ln or "\x02" in ln:
+            marker = "\x01" if "\x01" in ln else "\x02"
+            pos = ln.find(marker)
+            if pos:
+                out.append(("> " + ln[:pos]) if quote else ln[:pos])
+                appended = True
+            ln = ln[pos + 1:]
+            quote = marker == "\x01"
+        if ln:
+            out.append("> " + ln if quote else ln)
+        elif quote and not appended:
+            out.append(">")
+        elif not had_markers:
+            out.append(ln)
     return out
 
 
@@ -587,10 +671,28 @@ def clean_rss_body(value: str | None) -> str:
     text = re.sub(r"(?i)<span>\s*<a[^>]*>\[(?:link|comments)\]</a>\s*</span>", " ", text)
     # links stay clickable: <a href="U">T</a> -> [T](U)
     text = re.sub(r'(?is)<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r'[\2](\1)', text)
+    # round 16: blockquotes -> Discord quote markers (applied per line below)
+    text = re.sub(r"(?is)<blockquote[^>]*>", "\x01", text)
+    text = re.sub(r"(?i)</blockquote>", "\x02", text)
+    # round 16: bold tags -> Discord bold (only when present in the source)
+    text = re.sub(r"(?is)<(?:b|strong)\s*>(.*?)</(?:b|strong)>", r"**\1**", text)
+    # round 16: list items -> Discord bullet lines
+    text = re.sub(r"(?i)<li[^>]*>", "\n- ", text)
+    text = re.sub(r"(?i)</li\s*>", " ", text)
+    text = re.sub(r"(?i)</?(?:ul|ol)[^>]*>", "\n", text)
     text = re.sub(r"(?i)<\s*(br|p\b|/p|/div|/li|/table|/tr|/td|h[1-6])[^>]*>", "\n", text)
     text = re.sub(r"(?i)<img[^>]*>", " ", text)
     text = re.sub(r"<[^>]+>", " ", text)
-    text = html_lib.unescape(text)
+    # round 16: the feed double-escapes entities (&amp;gt;) — unescape to stable
+    for _ in range(3):
+        unescaped = html_lib.unescape(text)
+        if unescaped == text:
+            break
+        text = unescaped
+    # round 16: relative reddit links (selftext user/wiki links) -> absolute
+    text = re.sub(r"\]\(/u/([^\s/]+)/?\)", r"](https://www.reddit.com/user/\1/)", text)
+    text = re.sub(r"\]\(/r/([^\s)]+)\)?",
+                  lambda m: "](" + "https://www.reddit.com/r/" + m.group(1) + ")", text)
     text = re.sub(r"submitted by\s+/u/\S+\s+to\s+r/\S+", " ", text)
     # redd.it media link -> gone (the gallery has the media)
     text = re.sub(r"\[[^\]]*\]\(\s*https?://(?:i\.|preview\.|external-preview\.)?redd\.it/[^\s)]*\s*\)", " ", text)
@@ -599,6 +701,7 @@ def clean_rss_body(value: str | None) -> str:
     # RSS nav leftovers that survived as markdown links: [link](…) [comments](…)
     text = re.sub(r"(?i)\[(?:link|comments)\]\(\s*[^\s)]*\s*\)", " ", text)
     lines = [re.sub(r"\s{2,}", " ", ln).strip() for ln in text.splitlines()]
+    lines = _apply_quote_markers(lines)
     return _collapse_blanks(_line_stage(lines))
 
 
@@ -1508,7 +1611,8 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
     redlib_done = False
     if not post_json and PROXY_MEDIA and reddit_proxy is not None and fetch_path:
         tasks = [reddit_proxy.fetch_proxy_post(session, fetch_path,
-                                               label=label, health=_proxy_health)]
+                                               label=label, health=_proxy_health,
+                                               need_video=bool(has_video))]
         if not (base.get("vred_id") or base.get("redgifs_url")):
             tasks.append(enrich_gallery_redlib(session, fetch_path, label or "gallery"))
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1732,7 +1836,14 @@ def build_v3_payload(subreddit: str, data: dict, reddit_url: str, posted_ts: int
     """
     header = f"### [{_clean_post_title(data['title'])}]({reddit_url})\n*by {_clean_author_name(data['author'])} in r/{subreddit}*"
     if data["crosspost"]:
-        header += f"\n*🔁 Crosspost of {data['crosspost']['url']}*"
+        _cp_sub = re.search(r"/r/([^/]+)/", data["crosspost"].get("path") or "")
+        if not _cp_sub:
+            _cp_sub = re.search(r"/r/([^/]+)/", data["crosspost"].get("url") or "")
+        if _cp_sub:
+            header += (f"\n*🔁 Crosspost of [{_cp_sub.group(1)}]"
+                       f"({data['crosspost']['url']}) Subreddit*")
+        else:
+            header += f"\n*🔁 Crosspost of {data['crosspost']['url']}*"
 
     media = data["media"]
     stats = data["stats"]
