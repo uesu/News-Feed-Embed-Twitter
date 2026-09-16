@@ -98,13 +98,13 @@ and to [@dangered wolf](https://github.com/dangeredwolf), creator and lead devel
 │   ├── DEPENDABOT.md              # full plain-English Dependabot explanation
 │   ├── DISCOHOOK.md               # Discohook: what it's for, fully optional, safe to disable
 │   └── CI_SMOKE.md                # ci.yml + test_smoke.py: the required offline safety gate
-├── main.py                        # X/Twitter — V1 (production copy)
+├── twitter_v1.py                  # X/Twitter — V1 (production copy)
 ├── testing area/                  # tested copies of every engine (see Testing area guide)
-│   ├── main_v2testpro.py / main_v2testproround10.py      # X V2 (buttons outside)
-│   ├── main_v3testpro.py / main_v3testproround10.py      # X V3 (buttons inside — ACTIVE)
-│   ├── reddit_maintest.py         # Reddit V1 (free, mirror auto-embed)
-│   ├── reddit_main_v2test.py      # Reddit V2 (Components V2 via EmbedEZ API)
-│   ├── reddit_main_v3test.py      # Reddit V3 (proxy media + native fallback — ACTIVE)
+│   ├── twitter_v2_button_outside.py      # X V2 (buttons outside)
+│   ├── twitter_v3.py              # X V3 (buttons inside — ACTIVE)
+│   ├── reddit_main.py             # Reddit V1 (free, mirror auto-embed)
+│   ├── reddit_main_v2_embedez.py  # Reddit V2 (Components V2 via EmbedEZ API)
+│   ├── reddit_main_v3.py          # Reddit V3 (proxy media + native fallback — ACTIVE)
 │   ├── reddit_proxy.py            # Reddit V3 proxy services (round 13: redditez/vxreddit/embeddit)
 │   └── video_diag.py              # X video tile diagnostic (round 10)
 ├── tests/
