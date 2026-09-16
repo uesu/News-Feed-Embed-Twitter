@@ -347,6 +347,27 @@ def extract_post_id(path: str) -> str | None:
     return match.group(1) if match else None
 
 
+CROSSPOST_PERMALINK_RE = re.compile(r"/r/[^/\s?<>]+/comments/[a-zA-Z0-9]+/")
+
+
+def find_crosspost_original_path(text: str | None, own_path: str | None = None) -> str | None:
+    """
+    Round 14 crosspost detection: a crosspost's content (RSS content, redlib
+    post area, proxy body) contains the word 'crosspost' AND a permalink to
+    the ORIGINAL post ("u/x crossposted this from r/Y — original post").
+    Returns the original path '/r/<sub>/comments/<id>/' or None.
+    """
+    if not text or "crosspost" not in text.lower():
+        return None
+    own = (own_path or "").rstrip("/")
+    for m in CROSSPOST_PERMALINK_RE.finditer(text):
+        p = m.group(0).rstrip("/")
+        if p and p == own:
+            continue  # the post's own permalink, not the original
+        return p + "/"
+    return None
+
+
 def _subreddit_by_name(name: str) -> str | None:
     for sub in SUBREDDITS:
         if sub.lower() == (name or "").lower():
@@ -366,26 +387,36 @@ def strip_html(value: str | None) -> str:
 
 def clean_rss_body(value: str | None) -> str:
     """
-    Turn the RSS entry's content HTML into clean plain text.
+    Turn the RSS entry's content HTML into clean card text (Discord markdown).
     The feed wraps post HTML in <table><tr><td>…</td></tr></table> and appends
     a 'submitted by /u/… to r/…' footer plus [link]/[comments] spans — all of
     that is stripped; paragraphs are kept on separate lines.
+    Round 14: links become clickable markdown — <a href="U">T</a> -> [T](U)
+    (and raw-markdown RSS links pass through untouched) — while redd.it
+    MEDIA URLs (bare or as links) are removed from the text, since the media
+    already sits in the gallery (fixes the "…s=…dc0Seems like the…" bug).
     """
     if not value:
         return ""
     text = value
-    text = re.sub(r"(?i)<\s*(br|/p|/div|/li|/table|/tr|/td|h[1-6])[^>]*>", "\n", text)
+    # [link]/[comments] nav spans first (before the generic anchor rule)
     text = re.sub(r"(?i)<span>\s*<a[^>]*>\[(?:link|comments)\]</a>\s*</span>", " ", text)
+    # links stay clickable: <a href="U">T</a> -> [T](U)
+    text = re.sub(r'(?is)<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r'[\2](\1)', text)
+    text = re.sub(r"(?i)<\s*(br|/p|/div|/li|/table|/tr|/td|h[1-6])[^>]*>", "\n", text)
     text = re.sub(r"(?i)<img[^>]*>", " ", text)
     text = re.sub(r"<[^>]+>", " ", text)
     text = html_lib.unescape(text)
     text = re.sub(r"submitted by\s+/u/\S+\s+to\s+r/\S+", " ", text)
+    # redd.it media link -> gone (the gallery has the media)
+    text = re.sub(r"\[[^\]]*\]\(\s*https?://(?:i\.|preview\.|external-preview\.)?redd\.it/[^\s)]*\s*\)", " ", text)
+    # bare redd.it URL -> gone (never touch a markdown link target)
+    text = re.sub(r"(?<!\]\()https?://(?:i\.|preview\.|external-preview\.)?redd\.it/[^\s<>)\]]+(?!\))", " ", text)
+    # RSS nav leftovers that survived as markdown links: [link](…) [comments](…)
+    text = re.sub(r"(?i)\[(?:link|comments)\]\(\s*[^\s)]*\s*\)", " ", text)
     lines = [re.sub(r"\s{2,}", " ", ln).strip() for ln in text.splitlines()]
     lines = [ln for ln in lines if ln]
-    # Drop lines that are ONLY a redd.it media URL (the RSS content inlines
-    # the post's images as links; they belong in the media gallery, not text)
-    # or ONLY a leftover [link]/[comments] nav label (RSS / redlib footers).
-    lines = [ln for ln in lines if not (ln.startswith("http") and "redd.it/" in ln)]
+    # leftover [link]/[comments] nav labels (RSS / redlib footers)
     lines = [ln for ln in lines if ln.lower() not in ("link", "comments", "[link]", "[comments]")]
     return "\n".join(lines)
 
@@ -932,6 +963,7 @@ def base_from_redlib_page(page_html: str | None, path: str) -> dict | None:
         "content_html": area,
         "thumb": og.group(1) if og else None,
         "body": clean_rss_body(area),
+        "crosspost_orig_path": find_crosspost_original_path(area, path),
         "vred_id": extract_vreddit_id(area),
         "redgifs_url": extract_redgifs_url(area),
         "youtube_url": extract_youtube_url(area),
@@ -1035,7 +1067,7 @@ async def enrich_gallery_redlib(session: aiohttp.ClientSession, path: str,
                          f"{len(items)} media item(s).")
             return items
     logging.info(f"[{label}] redlib gallery enrichment failed (all instances) — "
-                 f"single thumbnail kept.")
+                 f"proxy/native media used instead.")
     return []
 
 
@@ -1109,6 +1141,8 @@ def entry_to_base_data(entry) -> dict:
         "content_html": content_html,
         "thumb": thumb,
         "body": clean_rss_body(content_html),
+        "crosspost_orig_path": find_crosspost_original_path(
+            content_html, normalize_reddit_path(str(getattr(entry, "link", "")))),
         "vred_id": extract_vreddit_id(content_html),
         "redgifs_url": extract_redgifs_url(content_html),
         "youtube_url": extract_youtube_url(content_html),
@@ -1241,46 +1275,109 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
         yt_vid_early, _ = extract_youtube_id(yt_url)
         has_video = bool(vid or yt_vid_early or base.get("redgifs_url"))
 
+    # ---- round 14: crossposts fetch the ORIGINAL post's media ------------
+    # A crosspost's own pages carry little (vxreddit shows one thumbnail,
+    # the RSS content no media), so media + stats come from the ORIGINAL
+    # post; the card keeps the crosspost URL + the "🔁 Crosspost of" line.
+    fetch_path = path
+    if not post_json and base.get("crosspost_orig_path"):
+        fetch_path = base["crosspost_orig_path"]
+        crosspost = {"url": f"https://www.reddit.com{fetch_path}", "path": fetch_path}
+        logging.info(f"[{label or 'native'}] crosspost — media/stats from the "
+                     f"original post {fetch_path}")
+
     # ---- round 13: PROXY media services (native mode only) ---------------
     # redditez.com -> vxreddit.com -> embeddit.deltandy.me, in that priority
     # order (see testing area/reddit_proxy.py). The winning service's own
     # URLs are used verbatim: full-res photos, EVERY gallery photo (20 ->
     # 2 containers), videos WITH audio, GIFs. The per-run warm-up
     # (proxy_health.json) skips services already proven dead this run.
-    # Any failure here simply falls through to the round-12 native path.
+    # Round 14: the redlib post-page harvest runs IN PARALLEL with the proxy
+    # fetch (it is the only source that lists EVERY gallery item incl. GIFs
+    # in order — the redditez og tags omit GIFs). Skipped for real video
+    # posts (the DASH chain handles those). Any failure here simply falls
+    # through to the round-12 native path.
     proxy_media_used = False
-    if not post_json and PROXY_MEDIA and reddit_proxy is not None and path:
-        proxy = await reddit_proxy.fetch_proxy_post(session, path,
-                                                    label=label, health=_proxy_health)
+    redlib_items: list[dict] = []
+    redlib_done = False
+    if not post_json and PROXY_MEDIA and reddit_proxy is not None and fetch_path:
+        tasks = [reddit_proxy.fetch_proxy_post(session, fetch_path,
+                                               label=label, health=_proxy_health)]
+        if not (base.get("vred_id") or base.get("redgifs_url")):
+            tasks.append(enrich_gallery_redlib(session, fetch_path, label or "gallery"))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        redlib_done = len(tasks) > 1
+        if redlib_done and isinstance(results[1], list):
+            redlib_items = results[1]
+        proxy = results[0] if isinstance(results[0], dict) else None
+        if not proxy and isinstance(results[0], Exception):
+            logging.info(f"[{label or 'proxy'}] proxy fetch error: {results[0]}")
         if proxy:
-            proxy_media = []
-            for m in proxy["media"]:
-                if m["kind"] == "video":
-                    # range-check the muxed mp4; if it died, drop the whole
-                    # proxy result so the native DASH chain (with audio) runs
-                    ok, size = await media_url_ok(session, m["url"], timeout=90, video=True)
-                    if ok:
-                        logging.info(f"[{label or 'proxy'}] proxy video OK via "
-                                     f"{proxy['service']} ({size} bytes).")
-                        proxy_media.append(m)
-                    else:
-                        logging.info(f"[{label or 'proxy'}] {proxy['service']} video URL "
-                                     f"failed the range check — native video chain will run.")
-                        proxy_media = None
-                        break
+            proxy_video = next((m for m in proxy["media"]
+                                if m["kind"] == "video"), None)
+            proxy_images = [m for m in proxy["media"]
+                            if m["kind"] != "video"]
+            video_ok = False
+            if proxy_video:
+                # range-check the muxed mp4 (has audio)
+                video_ok, size = await media_url_ok(session, proxy_video["url"],
+                                                    timeout=90, video=True)
+                if video_ok:
+                    logging.info(f"[{label or 'proxy'}] proxy video OK via "
+                                 f"{proxy['service']} ({size} bytes).")
                 else:
-                    proxy_media.append(m)
-            if proxy_media:
-                media = proxy_media
+                    logging.info(f"[{label or 'proxy'}] {proxy['service']} video URL "
+                                 f"failed the range check — native video chain will run.")
+
+            def _use_proxy_text():
+                nonlocal stats, body
                 stats = proxy.get("stats")
                 if proxy.get("body"):
                     body = proxy["body"][:MAX_BODY_CHARS]
+
+            video_dead = bool(proxy_video) and not video_ok
+            if proxy_video and video_ok:
+                # video post: the proxy's muxed mp4 tile ONLY (never a dup
+                # first-frame thumbnail)
+                media = [proxy_video]
+                _use_proxy_text()
+                proxy_media_used = True
+                logging.info(f"[{label or 'proxy'}] card media via {proxy['service']} "
+                             f"— 1 video tile.")
+            elif (not video_dead and redlib_items
+                  and len(redlib_items) >= max(1, len(proxy_images))):
+                # image post: the COMPLETE ordered gallery from the redlib
+                # harvest — it lists EVERY item incl. GIFs (the redditez og
+                # tags omit GIFs); body/stats still come from the proxy
+                media = [dict(x) for x in redlib_items
+                         if not (has_video and _is_external_preview(x["url"]))]
+                _use_proxy_text()
+                proxy_media_used = True
+                logging.info(f"[{label or 'proxy'}] card media via redlib harvest "
+                             f"— {len(media)} item(s) (body/stats via "
+                             f"{proxy['service']}).")
+            elif not video_dead and proxy_images:
+                media = proxy_images
+                _use_proxy_text()
                 proxy_media_used = True
                 logging.info(f"[{label or 'proxy'}] card media via {proxy['service']} "
                              f"— {len(media)} item(s).")
             else:
+                # no usable proxy media (a dead proxy video counts too — the
+                # native DASH chain has audio)
                 logging.info(f"[{label or 'proxy'}] no usable proxy media — "
                              f"falling back to the native RSS path.")
+        # round 14: redditez og pages often lack the stats line (they live in
+        # the oembed, not the og tags) — backfill from the Embeddit JSON
+        # (one extra request, ~1 s, not bot-gated)
+        if proxy_media_used and stats is None:
+            try:
+                stats = await reddit_proxy.fetch_embeddit_stats(session, fetch_path,
+                                                                label or "stats")
+                if stats:
+                    logging.info(f"[{label or 'stats'}] stats via embeddit — {stats}")
+            except Exception as e:
+                logging.info(f"[{label or 'stats'}] embeddit stats fetch failed: {e}")
 
     # ---- VIDEO FIRST (round 12): the tile is the video, never a dup thumb
     video_url = None
@@ -1303,27 +1400,42 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
                 ok, _ = await media_url_ok(session, base["redgifs_url"], timeout=30, video=True)
                 if ok:
                     media.append({"kind": "video", "url": base["redgifs_url"]})
-            if not any(x["kind"] == "video" for x in media):
-                # ALL photos from the RSS content, best rendition each
-                native_items = extract_native_media(base.get("content_html"))
-                logging.info(f"[{label or 'native'}] native media in RSS content: "
-                             f"{len(native_items)} url(s).")
-                for p in native_items:
-                    if has_video and _is_external_preview(p["url"]):
-                        continue  # it's the video's screenshot
-                    if p["kind"] == "image":
-                        swap = i_reddit_swap(p["url"])
-                        if swap:
-                            ok, _ = await media_url_ok(session, swap, timeout=15)
-                            if ok:
-                                p["url"] = swap
-                                logging.info(f"photo via i.redd.it full-res swap ({swap}).")
-                    media.append(p)
-            if not media and path:
-                # Multi-image GALLERY posts: the RSS content carries no image
-                # links (single-image posts do) — best-effort redlib harvest
-                # of the post page (parallel, ~10s worst case, no retry).
-                media = await enrich_gallery_redlib(session, path, label or "gallery")
+            if (not any(x["kind"] == "video" for x in media)
+                    and not proxy_media_used):
+                # round 14: skipped entirely when the proxy path already
+                # filled the gallery — a shorter redlib/RSS list must never
+                # downgrade it. The `not media` fallbacks below still run
+                # when the winning branch produced an empty list.
+                if redlib_items:
+                    # round 14: the COMPLETE ordered gallery (incl. GIFs,
+                    # full-res i.redd.it) from the parallel redlib harvest —
+                    # takes priority over the RSS content (which omits
+                    # gallery items + GIFs)
+                    media = [dict(x) for x in redlib_items
+                             if not (has_video and _is_external_preview(x["url"]))]
+                    logging.info(f"[{label or 'native'}] card media via redlib "
+                                 f"harvest — {len(media)} item(s).")
+                else:
+                    # ALL photos from the RSS content, best rendition each
+                    native_items = extract_native_media(base.get("content_html"))
+                    logging.info(f"[{label or 'native'}] native media in RSS content: "
+                                 f"{len(native_items)} url(s).")
+                    for p in native_items:
+                        if has_video and _is_external_preview(p["url"]):
+                            continue  # it's the video's screenshot
+                        if p["kind"] == "image":
+                            swap = i_reddit_swap(p["url"])
+                            if swap:
+                                ok, _ = await media_url_ok(session, swap, timeout=15)
+                                if ok:
+                                    p["url"] = swap
+                                    logging.info(f"photo via i.redd.it full-res swap ({swap}).")
+                        media.append(p)
+            if not media and not redlib_done and fetch_path:
+                # (legacy, e.g. video posts where the harvest was skipped):
+                # best-effort redlib harvest of the post page (parallel,
+                # ~10s worst case, no retry).
+                media = await enrich_gallery_redlib(session, fetch_path, label or "gallery")
             if not media and base.get("thumb"):
                 # legacy fallback: the feed's single thumbnail
                 thumb = base["thumb"]
@@ -1635,6 +1747,8 @@ async def main():
                         "content_html": st,
                         "thumb": None,
                         "body": strip_html(st),
+                        "crosspost_orig_path": normalize_reddit_path(
+                            str(post_json.get("crosspost_post_link") or "")),
                         "vred_id": extract_vreddit_id(st) or extract_vreddit_id(str(post_json.get("url") or "")),
                         "redgifs_url": extract_redgifs_url(st),
                         "youtube_url": extract_youtube_url(st, str(post_json.get("url") or "")),
@@ -1657,8 +1771,13 @@ async def main():
                                 "content_html": proxy.get("body") or "",
                                 "thumb": None,
                                 "body": proxy.get("body") or "",
-                                "vred_id": None,
-                                "redgifs_url": None,
+                                "crosspost_orig_path": find_crosspost_original_path(
+                                    proxy.get("body") or "", path),
+                                # the proxy body can carry the post's video
+                                # link (e.g. a crosspost of a video shows the
+                                # original's v.redd.it URL)
+                                "vred_id": extract_vreddit_id(proxy.get("body") or ""),
+                                "redgifs_url": extract_redgifs_url(proxy.get("body") or ""),
                                 "youtube_url": extract_youtube_url(proxy.get("body") or ""),
                             }
                             logging.info(f"[{TEST_POST_ID}] test post base built from "
