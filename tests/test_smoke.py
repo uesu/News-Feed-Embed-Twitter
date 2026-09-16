@@ -48,14 +48,12 @@ def load_module(name, path):
 
 # ---- 1. every monitor script must import --------------------------------
 SCRIPTS = [
-    "main.py",
-    "testing area/reddit_maintest.py",
-    "testing area/reddit_main_v2test.py",
-    "testing area/reddit_main_v3test.py",
-    "testing area/main_v2testpro.py",
-    "testing area/main_v2testproround10.py",
-    "testing area/main_v3testpro.py",
-    "testing area/main_v3testproround10.py",
+    "twitter_v1.py",
+    "testing area/reddit_main.py",
+    "testing area/reddit_main_v2_embedez.py",
+    "testing area/reddit_main_v3.py",
+    "testing area/twitter_v2_button_outside.py",
+    "testing area/twitter_v3.py",
     "testing area/video_diag.py",
 ]
 v3 = None
