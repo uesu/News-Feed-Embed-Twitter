@@ -464,6 +464,49 @@ for module in (v3, proxy):
     check("r15 paragraph spacing", cleaner("<p>First</p><p>Second</p>") == "First\n\nSecond")
     check("r15 hidden video URL", cleaner("<p>https://v.redd.it/abc</p>") == "")
     check("r15 linked HTML footer", cleaner('<span>submitted by <a href="https://reddit.com/u/name">/u/name</a> to <a href="https://reddit.com/r/sub">r/sub</a></span>') == "")
+    # ---- round 16: source HTML formatting (both cleaners) ------------------
+    check("r16 bold from strong tag",
+          cleaner("<p>Ice DMG <strong>increases by 20%</strong> a lot</p>")
+          == "Ice DMG **increases by 20%** a lot")
+    check("r16 bold from b tag",
+          cleaner("<p><b>Anomaly</b> specialty</p>") == "**Anomaly** specialty")
+    check("r16 no bold forced when absent",
+          cleaner("<p>Ice DMG increases by 20% a lot</p>")
+          == "Ice DMG increases by 20% a lot")
+    check("r16 bold nested inside a link",
+          cleaner('<strong><a href="https://lunaris.moe/">Lunaris</a></strong> is nice')
+          == "**[Lunaris](https://lunaris.moe/)** is nice")
+    check("r16 bullet list",
+          cleaner("<ul><li>first item</li><li>second item</li></ul>")
+          == "- first item\n- second item")
+    check("r16 bullet with inline bold",
+          cleaner("<ul><li>Agents with the <strong>Anomaly</strong> specialty "
+                  "have their ATK increased by <strong>20%</strong>.</li></ul>")
+          == "- Agents with the **Anomaly** specialty have their ATK "
+             "increased by **20%**.")
+    check("r16 blockquote becomes a Discord quote line",
+          cleaner("<p>before</p><blockquote>[spoilers] &amp;gt;!hidden!&amp;lt;"
+                  "</blockquote><p>after</p>")
+          == "before\n> [spoilers] >!hidden!" + "<\nafter")
+    check("r16 relative user link becomes absolute",
+          cleaner('<a href="/u/empty_Berry-Kun">u/empty_Berry-Kun</a>')
+          == "[u/empty_Berry-Kun](https://www.reddit.com/user/empty_Berry-Kun/)")
+    check("r16 relative subreddit link becomes absolute",
+          cleaner('<a href="/r/Genshin_Impact_Leaks/wiki/posting_guidelines/">'
+                  "posting guidelines</a>")
+          == "[posting guidelines]"
+             "(https://www.reddit.com/r/Genshin_Impact_Leaks/wiki/posting_guidelines/)")
+    check("r16 mangled 3-line link shape repairs to 3 URL-labelled lines",
+          cleaner("Firefly](https://b23.tv/prev0)\n"
+                  "Firefly) video [[https://b23.tv/dkCXgES](https://b23.tv/dkCXgES)\n\n"
+                  "Feixiao](https://b23.tv/dkCXgES](https://b23.tv/dkCXgES)\n\n"
+                  "Feixiao) video [[https://b23.tv/XojBeMr](https://b23.tv/XojBeMr)\n\n"
+                  "Therta](https://b23.tv/XojBeMr](https://b23.tv/XojBeMr)\n\n"
+                  "Therta) video [[https://b23.tv/PNtXo0u](https://b23.tv/PNtXo0u)]"
+                  "(https://b23.tv/PNtXo0u](https://b23.tv/PNtXo0u))")
+          == "Firefly video [https://b23.tv/dkCXgES](https://b23.tv/dkCXgES)\n\n"
+             "Feixiao video [https://b23.tv/XojBeMr](https://b23.tv/XojBeMr)\n\n"
+             "Therta video [https://b23.tv/PNtXo0u](https://b23.tv/PNtXo0u)")
 
 check("r15 author underscore", v3._clean_author_name(
     "](https://reddit.com/post)\n*by) Knight_Steve_") == "Knight_Steve_")
@@ -566,6 +609,70 @@ async def round15_fetch():
         check("r15 archive circuit breaker", v3._arctic_fail_count == 3)
         response.status = 200
         check("r15 archive circuit breaker skips", await v3.fetch_arctic_post(session, "abc") is None)
+
+# ---- round 16: crosspost line (subreddit masked to the original post) -----
+_cp_data = {"title": "Houses", "author": "Ananta2027", "body": "", "media": [],
+            "stats": None,
+            "crosspost": {"url": "https://www.reddit.com/r/Ananta2027/comments/1wgjebk/houses/",
+                          "path": "/r/Ananta2027/comments/1wgjebk/houses/"},
+            "op_comment": None, "youtube_url": None, "full_mode": False}
+_cp = v3.build_v3_payload("Ananta2027", _cp_data,
+                          "https://www.reddit.com/r/Other/comments/1wgjebl/cross/", 1)
+_cp_texts = [c["content"] for ct in _cp["components"] for c in ct["components"]
+             if c.get("type") == 10]
+check("r16 crosspost line masks the original subreddit",
+      "*🔁 Crosspost of [Ananta2027]"
+      "(https://www.reddit.com/r/Ananta2027/comments/1wgjebk/houses/) Subreddit*"
+      in _cp_texts[0], str(_cp_texts))
+_cp_raw = v3.build_v3_payload("Sub", dict(_cp_data, crosspost={"url": "https://x", "path": ""}),
+                              "https://www.reddit.com/r/Sub/comments/x/", 1)
+_cp_texts = [c["content"] for ct in _cp_raw["components"] for c in ct["components"]
+             if c.get("type") == 10]
+check("r16 crosspost raw line when subreddit unknown",
+      any("*🔁 Crosspost of https://x*" in t for t in _cp_texts), str(_cp_texts))
+_cp_none = v3.build_v3_payload("Sub", dict(_cp_data, crosspost=None),
+                               "https://www.reddit.com/r/Sub/comments/x/", 1)
+_cp_texts = [c["content"] for ct in _cp_none["components"] for c in ct["components"]
+             if c.get("type") == 10]
+check("r16 no crosspost line when none",
+      not any("Crosspost of" in t for t in _cp_texts), str(_cp_texts))
+
+# ---- round 16: need_video fall-through (video posts prefer the muxed video)
+async def _nv_rr(session, path, label=""):
+    return {"service": "redditez", "title": "T", "author": None, "subreddit": None,
+            "body": "b", "stats": {"ups": 1, "comments": 2}, "media": []}
+
+async def _nv_vx(session, path, label=""):
+    return {"service": "vxreddit", "title": "T", "author": "a", "subreddit": None,
+            "body": "b", "stats": None,
+            "media": [{"kind": "video", "url": "https://vxreddit.com/video.mp4"}]}
+
+async def _nv_ed(session, path, label=""):
+    return None
+
+orig_nv_rr, orig_nv_vx, orig_nv_ed = proxy._fetch_redditez, proxy._fetch_vxreddit, proxy._fetch_embeddit
+proxy._fetch_redditez, proxy._fetch_vxreddit, proxy._fetch_embeddit = _nv_rr, _nv_vx, _nv_ed
+_nv1 = asyncio.run(proxy.fetch_proxy_post(None, "/r/X/comments/abc/", label="t",
+                                          health={}, need_video=True))
+check("r16 need_video: skips media-less service, muxed video wins",
+      _nv1 and _nv1["service"] == "vxreddit" and _nv1["media"][0]["kind"] == "video",
+      str(_nv1))
+_nv2 = asyncio.run(proxy.fetch_proxy_post(None, "/r/X/comments/abc/", label="t", health={}))
+check("r16 need_video off (default): first usable service wins",
+      _nv2 and _nv2["service"] == "redditez", str(_nv2))
+proxy._fetch_vxreddit = _nv_ed
+_nv3 = asyncio.run(proxy.fetch_proxy_post(None, "/r/X/comments/abc/", label="t",
+                                          health={}, need_video=True))
+check("r16 need_video: keeps body/stats fallback when no video anywhere",
+      _nv3 and _nv3["service"] == "redditez"
+      and _nv3["stats"] == {"ups": 1, "comments": 2}, str(_nv3))
+proxy._fetch_vxreddit = _nv_vx
+_nv4 = asyncio.run(proxy.fetch_proxy_post(None, "/r/X/comments/abc/", label="t",
+                                          health={"redditez": {"ok": False}},
+                                          need_video=True))
+check("r16 need_video: warm-up-dead service still skipped",
+      _nv4 and _nv4["service"] == "vxreddit", str(_nv4))
+proxy._fetch_redditez, proxy._fetch_vxreddit, proxy._fetch_embeddit = orig_nv_rr, orig_nv_vx, orig_nv_ed
 
 asyncio.run(round15_flows())
 asyncio.run(round15_fetch())
