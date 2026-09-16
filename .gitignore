@@ -6,6 +6,7 @@
 # Runtime cache data (kept in the repo via `git add -f` in the workflows)
 posted_tweets.json
 posted_reddit.json
+proxy_health.json
 
 # Python bytecode & cache
 __pycache__/

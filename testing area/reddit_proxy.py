@@ -1,0 +1,456 @@
+# ---------------------------------------------------------------------------
+# ■ Reddit proxy media services (round 13) — redditez / vxreddit / embeddit
+# ---------------------------------------------------------------------------
+# Card media (photos / galleries / videos with audio / GIFs) is fetched from
+# one of three public proxy services, in PRIORITY ORDER:
+#
+#   1. redditez.com (EmbedEZ) — primary. The keyless search API resolves a
+#      permalink to a stable key, then the bot embed page (Discordbot UA)
+#      exposes og: tags: photos (incl. galleries) as embedez media URLs,
+#      videos as a playable mp4 WITH audio, plus title/body/stats.
+#   2. vxreddit.com — OpenGraph bot pages (Discordbot UA): every gallery
+#      photo as a full-res i.redd.it og:image, videos as a muxed mp4 WITH
+#      audio (redditvideo.mp4), stats in og:site_name.
+#   3. embeddit.deltandy.me — Mastodon-style JSON API (no bot UA needed):
+#      ALL gallery photos (up to 20), video with audio (under ~50 MB,
+#      merge=true), stats + body + author in the JSON.
+#
+# The winning service's own URLs are used VERBATIM in the card (mixing the
+# services' CDNs in one card is fine — Discord fetches each media URL
+# itself). A per-run warm-up probes all three with one known post and
+# writes proxy_health.json (auto-committed with the cache); the posting
+# loop skips services the warm-up proved dead — unless ALL are dead, in
+# which case every service gets a fresh try per post. If no service can
+# serve a post, the caller falls back to the native RSS media path
+# (round 12) — this module never blocks posting.
+#
+# Sources (all public, read 2026-09-16):
+#   github.com/dylanpdx/vxReddit     (Flask app; templates/*.html)
+#   github.com/DeltAndy123/Embeddit  (Express app; src/richEmbed.ts,
+#                                     src/util/encode.ts)
+#   embedez.com/api/v1  (keyless search endpoint + bot embed pages, the
+#                        same flow the EZ Discord bot uses)
+# ---------------------------------------------------------------------------
+import os
+import re
+import json
+import time
+import asyncio
+import logging
+import html as html_lib
+
+import aiohttp
+
+PROXY_HEALTH_FILE = "proxy_health.json"
+
+# Discord's scraper UA — vxreddit and embedez serve bot embed pages to
+# social-preview bots only (vxreddit redirects everyone else to reddit.com).
+PROXY_BOT_UA = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
+
+# Priority order (user-specified): redditez first; vxreddit + embeddit are
+# the most uptime-reliable and are the fallbacks.
+PROXY_SERVICES = ("redditez", "vxreddit", "embeddit")
+
+# --- redditez / EmbedEZ (keyless public API) --------------------------------
+REDDITEZ_SEARCH_ENDPOINT = "https://embedez.com/api/v1/providers/search"
+REDDITEZ_EMBED_PAGE = "https://embedez.com/embed/{key}"
+# What the embed page reports when the EmbedEZ backend — redditez's engine,
+# the service that fetches the Reddit post FOR us — is down or could not
+# fetch the post from Reddit at that moment. It is a service-side fetch
+# failure (not a problem with the post itself), so it means "redditez
+# unavailable right now" and the post falls through to the next service.
+# Detected per post, not only at warm-up.
+REDDITEZ_FAIL_MARKERS = ("Failed to Get Post", "non-JSON response")
+
+# --- vxreddit -----------------------------------------------------------------
+VXREDDIT_BASE = "https://www.vxreddit.com"
+VXREDDIT_FAIL_MARKERS = ("Failed to get data from Reddit", "Internal server error")
+# og:site_name = "u/<author> on r/<sub> - ⬆️ <ups> | 💬 <comments>"
+VXREDDIT_STATS_RE = re.compile(r"u/(\S+) on r/(\S+) - ⬆️ (\d+)(?: \| 💬 (\d+))?")
+
+# --- embeddit -------------------------------------------------------------------
+# Mastodon-spoof API: GET /api/v1/statuses/<encoded-id> -> JSON. The encoded
+# id is Embeddit's idEncode of {"type": "post", "id": <post_id>, "merge":
+# true} (merge=true => the video comes back WITH audio, under ~50 MB).
+EMBEDDIT_BASE = os.getenv("EMBEDDIT_INSTANCE", "https://embeddit.deltandy.me").rstrip("/")
+EMBEDDIT_ENCODE_CHARS = "1234567890abcdefghijklmnopqrstuvwxyz"
+# Footer line inside the content HTML: "⬆️ 305 • 💬 21"
+EMBEDDIT_STATS_RE = re.compile(r"⬆️ (\d[\d,]*) • 💬 (\d[\d,*])")
+# account.display_name = "u/<author> (@ r/<subreddit>)"
+EMBEDDIT_AUTHOR_RE = re.compile(r"u/(\S+) \(@ (r/[^\s)]+)")
+
+# Icon-style stats (redditez): "💬 152 🔁 0 💜 573 👀 0"
+STATS_ICONS_RE = re.compile(r"💬\s*(\d[\d,]*)\s*🔁\s*(\d[\d,]*)\s*💜\s*(\d[\d,]*)")
+
+# Warm-up: one known-good single-image post used to probe all three
+# services once per run (override: PROXY_WARMUP_POST=<subreddit>/<post_id>).
+WARMUP_POST_ID = os.getenv("PROXY_WARMUP_POST", "HonkaiStarRail_leaks/1whbjbh").strip()
+
+PROXY_TIMEOUT = aiohttp.ClientTimeout(total=20)
+
+
+# ---------------------------------------------------------------------------
+# ■ Embeddit status-id codec (port of src/util/encode.ts)
+# ---------------------------------------------------------------------------
+def status_id_encode(obj) -> str:
+    """Embeddit's idEncode, ported 1:1 (live-verified 2026-09-16 against the
+    hosted instance): every character of the compact JSON string becomes
+    two chars of EMBEDDIT_ENCODE_CHARS (code // 36, then code % 36 — the
+    alphabet is 36 chars)."""
+    text = json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+    size = len(EMBEDDIT_ENCODE_CHARS)
+    out = []
+    for ch in text:
+        code = ord(ch)
+        out.append(EMBEDDIT_ENCODE_CHARS[code // size])
+        out.append(EMBEDDIT_ENCODE_CHARS[code % size])
+    return "".join(out)
+
+
+def status_id_decode(encoded: str) -> str:
+    """Inverse of status_id_encode (used by the smoke test)."""
+    size = len(EMBEDDIT_ENCODE_CHARS)
+    out = []
+    for i in range(0, len(encoded) - 1, 2):
+        code = (EMBEDDIT_ENCODE_CHARS.index(encoded[i]) * size
+                + EMBEDDIT_ENCODE_CHARS.index(encoded[i + 1]))
+        out.append(chr(code))
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# ■ Parsing helpers (pure — unit-testable offline)
+# ---------------------------------------------------------------------------
+def _og_meta(page_html: str) -> dict:
+    """og:/twitter: meta tags -> dict. og:image collects ALL occurrences in
+    order (galleries emit one tag per photo); every other key keeps the
+    first value. HTML entities are unescaped."""
+    meta = {}
+    for m in re.finditer(r"<meta[^>]+>", page_html, re.I):
+        tag = m.group(0)
+        pm = re.search(r'property="([^"]+)"', tag) or re.search(r'name="([^"]+)"', tag)
+        cm = re.search(r'content="([^"]*)"', tag)
+        if not (pm and cm):
+            continue
+        key = html_lib.unescape(pm.group(1)).strip().lower()
+        val = html_lib.unescape(cm.group(1)).strip()
+        if key == "og:image":
+            meta.setdefault("og:image", []).append(val)
+        else:
+            meta.setdefault(key, val)
+    return meta
+
+
+def _strip_html(value) -> str:
+    if not value:
+        return ""
+    text = re.sub(r"(?i)<br\s*/?>", "\n", value)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    lines = [re.sub(r"\s{2,}", " ", ln).strip() for ln in text.splitlines()]
+    return "\n".join(ln for ln in lines if ln)
+
+
+def parse_icon_stats(line: str):
+    """"💬 152 🔁 0  573 👀 0" -> {"comments": 152, "ups": 573} or None."""
+    m = STATS_ICONS_RE.search(line or "")
+    if not m:
+        return None
+    return {
+        "comments": int(m.group(1).replace(",", "")),
+        "ups": int(m.group(3).replace(",", "")),
+    }
+
+
+def parse_redditez_search(data: dict):
+    """Search API JSON -> the stable search key (or None)."""
+    if not isinstance(data, dict):
+        return None
+    inner = data.get("data")
+    if isinstance(inner, dict) and inner.get("key"):
+        return inner["key"]
+    return None
+
+
+def parse_embeddit_post(data: dict):
+    """Embeddit /api/v1/statuses JSON -> normalized dict (or None).
+    Normalized shape (shared by all three services):
+      {"service", "title", "author", "subreddit", "body", "stats",
+       "media": [{"kind": image|gif|video, "url": ...}, ...]}
+    """
+    if not isinstance(data, dict) or not data.get("account"):
+        return None
+    account = data["account"]
+    author = None
+    subreddit = None
+    dm = EMBEDDIT_AUTHOR_RE.search(str(account.get("display_name") or ""))
+    if dm:
+        author = dm.group(1)
+        subreddit = dm.group(2)[2:]
+    text = _strip_html(data.get("content") or "")
+    lines = [ln for ln in text.splitlines() if ln]
+    title = lines[0] if lines else None
+    body_lines = lines[1:]
+    stats = None
+    if body_lines:
+        fm = EMBEDDIT_STATS_RE.search(body_lines[-1])
+        if fm:
+            stats = {
+                "ups": int(fm.group(1).replace(",", "")),
+                "comments": int(fm.group(2).replace(",", "")),
+            }
+            body_lines = body_lines[:-1]
+    media = []
+    for att in data.get("media_attachments") or []:
+        url = att.get("url") if isinstance(att, dict) else None
+        if not url:
+            continue
+        if att.get("type") == "video":
+            media.append({"kind": "video", "url": url})
+        else:
+            kind = "gif" if url.split("?")[0].lower().endswith(".gif") else "image"
+            media.append({"kind": kind, "url": url})
+    return {
+        "service": "embeddit",
+        "title": title,
+        "author": author,
+        "subreddit": subreddit,
+        "body": "\n".join(body_lines),
+        "stats": stats,
+        "media": media,
+    }
+
+
+def _media_from_og(meta: dict) -> list:
+    """og: tags -> media list. og:video (muxed mp4 with audio) first, then
+    every og:image in order (galleries emit one per photo)."""
+    media = []
+    video_url = meta.get("og:video:secure_url") or meta.get("og:video")
+    if video_url:
+        media.append({"kind": "video", "url": video_url})
+    for img in meta.get("og:image", []):
+        kind = "gif" if img.split("?")[0].lower().endswith(".gif") else "image"
+        media.append({"kind": kind, "url": img})
+    return media
+
+
+# ---------------------------------------------------------------------------
+# ■ Per-service fetchers (each returns the normalized dict, or None)
+# ---------------------------------------------------------------------------
+async def _fetch_redditez(session, path: str, label: str = ""):
+    """Step 1: keyless search API (permalink -> stable key).
+    Step 2: bot embed page (Discordbot UA) -> og: tags.
+    When the embed page shows "Failed to Get Post | EmbedEZ — Reddit
+    returned a non-JSON response", the EmbedEZ backend (which fetches the
+    post from Reddit on our behalf) is down or unavailable at that moment —
+    a service-side failure, not a problem with the post. Treated as a miss:
+    the next service (vxreddit/embeddit) is tried."""
+    permalink = "https://www.reddit.com" + path
+    try:
+        async with session.get(
+            REDDITEZ_SEARCH_ENDPOINT,
+            params={"url": permalink},
+            headers={"User-Agent": PROXY_BOT_UA},
+            timeout=PROXY_TIMEOUT,
+        ) as resp:
+            if resp.status != 200:
+                logging.info(f"[{label}] redditez search HTTP {resp.status}.")
+                return None
+            data = await resp.json(content_type=None)
+        key = parse_redditez_search(data)
+        if not key:
+            logging.info(f"[{label}] redditez search returned no key: {str(data)[:150]}")
+            return None
+        async with session.get(
+            REDDITEZ_EMBED_PAGE.format(key=key),
+            headers={"User-Agent": PROXY_BOT_UA},
+            timeout=PROXY_TIMEOUT,
+        ) as resp:
+            if resp.status != 200:
+                logging.info(f"[{label}] redditez embed page HTTP {resp.status}.")
+                return None
+            page = await resp.text(errors="replace")
+        if any(marker in page for marker in REDDITEZ_FAIL_MARKERS):
+            logging.info(f"[{label}] redditez embed page reports a Reddit fetch "
+                         f"failure — next service will be tried.")
+            return None
+        meta = _og_meta(page)
+        media = _media_from_og(meta)
+        if not media and not meta.get("og:title"):
+            logging.info(f"[{label}] redditez embed page had no usable media.")
+            return None
+        stats = (parse_icon_stats(meta.get("og:site_name") or "")
+                 or parse_icon_stats(meta.get("og:description") or ""))
+        return {
+            "service": "redditez",
+            "title": meta.get("og:title"),
+            "author": None,
+            "subreddit": None,
+            "body": _strip_html(meta.get("og:description") or ""),
+            "stats": stats,
+            "media": media,
+        }
+    except Exception as e:
+        logging.info(f"[{label}] redditez error: {e}")
+        return None
+
+
+async def _fetch_vxreddit(session, path: str, label: str = ""):
+    """Bot embed page (Discordbot UA). Redirects are NOT followed — a 3xx
+    means the bot page was not served (UA mismatch or service down).
+    og:site_name carries the stats line: u/<author> on r/<sub> - ⬆️ N | 💬 M."""
+    try:
+        async with session.get(
+            VXREDDIT_BASE + path,
+            headers={"User-Agent": PROXY_BOT_UA},
+            timeout=PROXY_TIMEOUT,
+            allow_redirects=False,
+        ) as resp:
+            if 300 <= resp.status < 400:
+                logging.info(f"[{label}] vxreddit redirected (bot page not served) — skipping.")
+                return None
+            if resp.status != 200:
+                logging.info(f"[{label}] vxreddit HTTP {resp.status}.")
+                return None
+            page = await resp.text(errors="replace")
+        if any(marker in page for marker in VXREDDIT_FAIL_MARKERS):
+            logging.info(f"[{label}] vxreddit reports a Reddit fetch failure — "
+                         f"next service will be tried.")
+            return None
+        meta = _og_meta(page)
+        media = _media_from_og(meta)
+        stats = None
+        author = None
+        sm = VXREDDIT_STATS_RE.search(meta.get("og:site_name") or "")
+        if sm:
+            author = sm.group(1)
+            stats = {
+                "ups": int(sm.group(3)),
+                "comments": int(sm.group(4)) if sm.group(4) else 0,
+            }
+        return {
+            "service": "vxreddit",
+            "title": meta.get("og:title"),
+            "author": author,
+            "subreddit": None,
+            "body": _strip_html(meta.get("og:description") or ""),
+            "stats": stats,
+            "media": media,
+        }
+    except Exception as e:
+        logging.info(f"[{label}] vxreddit error: {e}")
+        return None
+
+
+async def _fetch_embeddit(session, path: str, label: str = ""):
+    """Mastodon-spoof JSON API — no bot UA needed, no redirects. The status
+    id is computed from the post id alone (encode {"type":"post",...}), so
+    the subreddit in the path is irrelevant here."""
+    m = re.search(r"/comments/([a-zA-Z0-9]+)/", path or "")
+    if not m:
+        return None
+    pid = m.group(1)
+    status_id = status_id_encode({"type": "post", "id": pid, "merge": True})
+    try:
+        async with session.get(
+            f"{EMBEDDIT_BASE}/api/v1/statuses/{status_id}",
+            headers={"User-Agent": PROXY_BOT_UA},
+            timeout=PROXY_TIMEOUT,
+        ) as resp:
+            if resp.status != 200:
+                logging.info(f"[{label}] embeddit HTTP {resp.status}.")
+                return None
+            data = await resp.json(content_type=None)
+    except Exception as e:
+        logging.info(f"[{label}] embeddit error: {e}")
+        return None
+    result = parse_embeddit_post(data)
+    if not result:
+        logging.info(f"[{label}] embeddit returned no parseable post data.")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# ■ Fallback chain + warm-up
+# ---------------------------------------------------------------------------
+async def fetch_proxy_post(session, path: str, label: str = "",
+                           health: dict | None = None) -> dict | None:
+    """Try the proxy services in priority order and return the normalized
+    result of the first one that produced usable data (media, stats, or
+    body). Services the warm-up proved dead this run are skipped — unless
+    ALL of them are dead, in which case every service gets a fresh try.
+    Returns None when nothing works (the caller uses the native path)."""
+    order = list(PROXY_SERVICES)
+    health = health or {}
+    marked_down = [s for s in order
+                   if isinstance(health.get(s), dict) and health[s].get("ok") is False]
+    if len(marked_down) < len(order):
+        order = [s for s in order if s not in marked_down]
+    for service in order:
+        if service == "redditez":
+            result = await _fetch_redditez(session, path, label)
+        elif service == "vxreddit":
+            result = await _fetch_vxreddit(session, path, label)
+        else:
+            result = await _fetch_embeddit(session, path, label)
+        if result and (result["media"] or result.get("stats") or result.get("body")):
+            logging.info(f"[{label}] proxy media via {service} — "
+                         f"{len(result['media'])} item(s).")
+            return result
+        logging.info(f"[{label}] {service} had no usable data — trying the next proxy.")
+    return None
+
+
+def load_proxy_health() -> dict:
+    """Reads the services section of proxy_health.json ({} when missing)."""
+    try:
+        with open(PROXY_HEALTH_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        services = data.get("services") if isinstance(data, dict) else None
+        return services if isinstance(services, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_proxy_health(health: dict):
+    """Writes proxy_health.json (auto-committed by the workflow)."""
+    try:
+        with open(PROXY_HEALTH_FILE, "w", encoding="utf-8") as f:
+            json.dump({"ts": int(time.time()), **health}, f, indent=2)
+    except Exception as e:
+        logging.error(f"Error saving proxy health: {e}")
+
+
+async def proxy_warmup(session, post_id: str | None = None) -> dict:
+    """Warm-up link test: probes ALL three services (in parallel) with one
+    known post — by default PROXY_WARMUP_POST, a stable single-image post —
+    and records the result in proxy_health.json. The posting loop then
+    skips services marked ok=false (unless all are dead). Any failure here
+    only marks the service down for this run; posting never depends on the
+    warm-up succeeding."""
+    raw = post_id or WARMUP_POST_ID
+    parts = raw.split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        logging.warning(f"PROXY_WARMUP_POST '{raw}' is invalid — use "
+                        f"<subreddit>/<post_id>. Warm-up skipped.")
+        return {}
+    sub, pid = parts
+    path = f"/r/{sub}/comments/{pid}/"
+    label = "proxy warm-up"
+    logging.info(f"Probing proxy media services (redditez, vxreddit, embeddit) "
+                 f"with {raw}...")
+    results = await asyncio.gather(
+        _fetch_redditez(session, path, label),
+        _fetch_vxreddit(session, path, label),
+        _fetch_embeddit(session, path, label),
+    )
+    services = {}
+    for service, result in zip(PROXY_SERVICES, results):
+        if result and (result["media"] or result.get("body") or result.get("stats")):
+            services[service] = {"ok": True, "detail": f"{len(result['media'])} media item(s)"}
+        else:
+            services[service] = {"ok": False, "detail": "no usable data"}
+        state = "OK" if services[service]["ok"] else "DOWN"
+        logging.info(f"[{label}] {service}: {state} — {services[service]['detail']}")
+    save_proxy_health({"post": raw, "services": services})
+    return services
