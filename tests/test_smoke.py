@@ -440,6 +440,134 @@ check("r14 embeddit: anchor title (plain, unescaped)",
 check("r14 embeddit: body excludes title link + stats footer",
       edd2 and edd2["body"] == "body line", str(edd2 and edd2.get("body")))
 
+# ---- Round 15: regression coverage (offline; synthetic archive fixtures) ----
+for module in (v3, proxy):
+    cleaner = module.clean_rss_body if module is v3 else module.clean_proxy_body
+    check("r15 valid standalone markdown retained",
+          cleaner("[Spotify](https://example.com/music)") == "[Spotify](https://example.com/music)")
+    check("r15 URL-labelled markdown retained",
+          cleaner("[https://example.com](https://example.com)") == "[https://example.com](https://example.com)")
+    check("r15 legitimate submitted-by prose retained",
+          cleaner("This was submitted by a musician.") == "This was submitted by a musician.")
+    check("r15 punctuation repair", cleaner("Buff](https://example.com)\nBuff): TBD") == "Buff: TBD")
+    check("r15 cascade repair", cleaner(
+        "Firefly](https://example.com/previous)\nFirefly) video [https://b23.tv/aaa\n"
+        "Feixiao](https://b23.tv/aaa)\nFeixiao) video [https://b23.tv/bbb") ==
+        "Firefly video [https://b23.tv/aaa](https://b23.tv/aaa)\n"
+        "Feixiao video [https://b23.tv/bbb](https://b23.tv/bbb)")
+    check("r15 footer repair", cleaner(
+        "[ ](https://reddit.com/post)\nsubmitted](https://reddit.com/post)\n"
+        "submitted) by [ /u/name_ ](https://reddit.com/u/name_) to [r/sub](https://reddit.com/r/sub)") == "")
+    check("r15 paragraph spacing", cleaner("<p>First</p><p>Second</p>") == "First\n\nSecond")
+    check("r15 hidden video URL", cleaner("<p>https://v.redd.it/abc</p>") == "")
+    check("r15 linked HTML footer", cleaner('<span>submitted by <a href="https://reddit.com/u/name">/u/name</a> to <a href="https://reddit.com/r/sub">r/sub</a></span>') == "")
+
+check("r15 author underscore", v3._clean_author_name(
+    "](https://reddit.com/post)\n*by) Knight_Steve_") == "Knight_Steve_")
+check("r15 author hyphen", v3._clean_author_name("/u/valid-name") == "valid-name")
+check("r15 garbage author", v3._clean_author_name("](https://reddit.com/post)") == "unknown")
+check("r15 clean title punctuation", v3._clean_post_title("[Preview] *New* weapon") == "[Preview] *New* weapon")
+check("r15 title artifact", v3._clean_post_title("Overview](https://reddit.com/post)\n*by") == "Overview")
+youtube = "https://www.youtube.com/watch?v=abcdefghijk"
+check("r15 cleaned YouTube URL dropped", v3._drop_youtube_line(
+    v3.clean_rss_body(f"<p>{youtube}</p><p>First</p><p>Second</p>"), youtube) == "First\n\nSecond")
+check("r15 other YouTube URL kept", v3._drop_youtube_line(
+    "https://youtu.be/12345678901", youtube) == "https://youtu.be/12345678901")
+
+archive_gallery = {"id": "gallery1", "gallery_data": {"items": [
+    {"media_id": str(i)} for i in range(6)]}, "media_metadata": {
+    str(i): {"status": "valid", "e": "AnimatedImage" if i in (2, 3, 4) else "Image",
+             "s": {"gif" if i in (2, 3, 4) else "u":
+                   f"https://i.redd.it/{i}.gif" if i in (2, 3, 4) else
+                   f"https://preview.redd.it/slug-v0-{i}.jpg?width=700&amp;s=x"}}
+    for i in range(6)}}
+items = v3.arctic_gallery_items(archive_gallery)
+check("r15 six ordered gallery items", [item["kind"] for item in items] ==
+      ["image", "image", "gif", "gif", "gif", "image"])
+check("r15 full resolution image", items[0]["url"] == "https://i.redd.it/0.jpg")
+for malformed in (None, [], {}, {"gallery_data": []},
+                  {"gallery_data": {"items": []}, "media_metadata": []},
+                  {"gallery_data": {"items": [{"media_id": []}]}, "media_metadata": {}}):
+    check("r15 malformed gallery safe", v3.arctic_gallery_items(malformed) == [])
+
+# Fake every I/O boundary to exercise actual orchestration, not just parsers.
+import asyncio
+from unittest.mock import patch, AsyncMock
+from types import SimpleNamespace
+
+async def round15_flows():
+    original_path = "/r/Original/comments/orig1/title/"
+    original = {"id": "orig1", "permalink": original_path,
+                "selftext": "", "ups": 10, "num_comments": 2,
+                "media": {"reddit_video": {"fallback_url": "https://v.redd.it/video1/CMAF_1080.mp4"}}}
+    base = {"title": "Crosspost", "author": "name_", "body": "", "youtube_url": None,
+            "vred_id": None, "redgifs_url": None, "content_html": "", "thumb": None}
+    async def get_proxy(session, path, **kwargs):
+        check("r15 proxy fetch uses original", path == original_path)
+        return {"service": "test", "media": [{"kind": "video", "url": "https://example.com/video.mp4"}],
+                "stats": {"ups": 30, "comments": 4}, "body": ""}
+    fake_proxy = SimpleNamespace(fetch_proxy_post=AsyncMock(side_effect=get_proxy),
+                                 fetch_embeddit_stats=AsyncMock(return_value=None))
+    with patch.object(v3, "reddit_proxy", fake_proxy), patch.object(v3, "PROXY_MEDIA", True), \
+         patch.object(v3, "fetch_arctic_post", AsyncMock(return_value={"crosspost_parent_list": [original]})), \
+         patch.object(v3, "enrich_gallery_redlib", AsyncMock(return_value=[])), \
+         patch.object(v3, "media_url_ok", AsyncMock(return_value=(True, 123))), \
+         patch.object(v3, "resolve_video_url", AsyncMock(return_value="https://example.com/fallback.mp4")):
+        result = await v3.resolve_post_media(None, base, None, "/r/Sub/comments/cross1/title/")
+        check("r15 original crosspost link", result["crosspost"]["path"] == original_path)
+        check("r15 crosspost video only", result["media"] == [{"kind": "video", "url": "https://example.com/video.mp4"}])
+        check("r15 live proxy stats preferred", result["stats"]["ups"] == 30)
+        # A proxy screenshot must not prevent the original video's fallback.
+        fake_proxy.fetch_proxy_post = AsyncMock(return_value={"service": "test", "media": [
+            {"kind": "image", "url": "https://example.com/screenshot.jpg"}], "stats": None, "body": ""})
+        result = await v3.resolve_post_media(None, base, None, "/r/Sub/comments/cross1/title/")
+        check("r15 screenshot rejected", result["media"] == [{"kind": "video", "url": "https://example.com/fallback.mp4"}])
+        check("r15 archived stats labelled", result["stats"].get("archived") is True)
+    fake_proxy.fetch_proxy_post = AsyncMock(return_value={"service": "test", "media": items[:2],
+                                                         "body": "FirstSecond", "stats": None})
+    with patch.object(v3, "reddit_proxy", fake_proxy), patch.object(v3, "PROXY_MEDIA", True), \
+         patch.object(v3, "fetch_arctic_post", AsyncMock(return_value=archive_gallery)), \
+         patch.object(v3, "enrich_gallery_redlib", AsyncMock(return_value=[])):
+        result = await v3.resolve_post_media(None, dict(base, body="First\n\nSecond"), None,
+                                             "/r/Sub/comments/gallery1/title/")
+        check("r15 archive gallery beats short proxy", result["media"] == items)
+        check("r15 RSS body wins", result["body"] == "First\n\nSecond")
+    with patch.object(v3, "PROXY_MEDIA", False), \
+         patch.object(v3, "fetch_arctic_post", AsyncMock(return_value=archive_gallery)):
+        result = await v3.resolve_post_media(None, base, None, "/r/Sub/comments/gallery1/title/")
+        check("r15 gallery independent of proxies", result["media"] == items)
+    with patch.object(v3, "reddit_proxy", fake_proxy), patch.object(v3, "PROXY_MEDIA", True), \
+         patch.object(v3, "fetch_arctic_post", AsyncMock(return_value=None)), \
+         patch.object(v3, "enrich_gallery_redlib", AsyncMock(return_value=[])):
+        result = await v3.resolve_post_media(None, base, None, "/r/Sub/comments/new1/title/")
+        check("r15 archive miss keeps existing proxy path", result["media"] == items[:2])
+
+async def round15_fetch():
+    class Response:
+        status = 200
+        data = {"data": []}
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def json(self, **kwargs): return self.data
+    response = Response()
+    session = SimpleNamespace(get=lambda *args, **kwargs: response)
+    with patch.object(v3, "_arctic_fail_count", 0):
+        check("r15 archive empty response", await v3.fetch_arctic_post(session, "abc") is None)
+        check("r15 archive misses not outages", v3._arctic_fail_count == 0)
+        response.data = {"data": [{"id": "wrong"}, {"id": "abc"}]}
+        check("r15 archive verifies post ID", (await v3.fetch_arctic_post(session, "abc"))["id"] == "abc")
+        response.data = []
+        check("r15 archive malformed safe", await v3.fetch_arctic_post(session, "abc") is None)
+        response.status = 429
+        for _ in range(2): await v3.fetch_arctic_post(session, "abc")
+        check("r15 archive circuit breaker", v3._arctic_fail_count == 3)
+        response.status = 200
+        check("r15 archive circuit breaker skips", await v3.fetch_arctic_post(session, "abc") is None)
+
+asyncio.run(round15_flows())
+asyncio.run(round15_fetch())
+
+
 print()
 if failures:
     print(f"SMOKE TEST FAILURES ({len(failures)}): {failures}")

@@ -175,6 +175,58 @@ def _strip_html(value) -> str:
 _BLOCK_BOUNDARY_RE = re.compile(r"(?i)</?(?:p|div|li|tr|table|h[1-6]|blockquote|ul|ol)\b[^>]*>")
 
 
+
+def repair_mangled_link_lines(lines: list) -> list:
+    """Repair only paired Word](url) / Word) rest feed artifacts.
+
+    Never consume an intact Markdown link or borrow an unrelated URL.
+    """
+    out = []
+    i = 0
+    while i < len(lines):
+        tail = re.fullmatch(r"([^\s\[\]]+)\]\(https?://[^\s]*?\)?", lines[i])
+        if tail and i + 1 < len(lines):
+            word = tail.group(1)
+            if lines[i + 1].startswith(word + ")"):
+                rest = lines[i + 1][len(word) + 1:]
+                opener = re.search(r"\[(https?://[^\s\[\]]+)$", rest)
+                if opener:
+                    url = opener.group(1)
+                    rest = rest[:opener.start()] + f"[{url}]({url})"
+                out.append(word + rest)
+                i += 2
+                continue
+        out.append(lines[i])
+        i += 1
+    return out
+
+
+def _collapse_blanks(lines: list) -> str:
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip("\n")
+
+
+def _line_stage(lines: list) -> list:
+    """Drop recognizable feed navigation/footer artifacts, not prose."""
+    kept = []
+    for line in repair_mangled_link_lines(lines):
+        if line.lower() in ("link", "comments", "[link]", "[comments]", "permalink"):
+            continue
+        if re.match(r"^submitted\)?\s+by\s+\[?\s*/?u/", line, re.I):
+            continue
+        if re.fullmatch(r"\[\s*\]\]?\(https?://\S+\)", line):
+            continue
+        if re.fullmatch(r"[^\s\[\]]+\]\(https?://\S+?\)?", line):
+            continue
+        if re.fullmatch(r"\[https?://[^\s\[\]]+", line):
+            continue
+        line = re.sub(r"\[[^\]]*\]\(https?://v\.redd\.it/[^\s)]*\)", "", line)
+        line = re.sub(r"https?://v\.redd\.it/[^\s<>\])]*", "", line)
+        line = re.sub(r"[ \t]{2,}", " ", line).strip()
+        if re.fullmatch(r"https?://[^\s\[\]]+", line):
+            line = f"[{line}]({line})"
+        kept.append(line)
+    return kept
+
 def clean_proxy_body(value) -> str:
     """selftext/og:description HTML -> clean Discord-markdown card text:
       • <a href="URL">text</a>  ->  [text](URL)   (links stay clickable)
@@ -197,7 +249,7 @@ def clean_proxy_body(value) -> str:
     # bare redd.it URL -> gone (but never touch a markdown link target)
     text = re.sub(r"(?<!\]\()https?://(?:i\.|preview\.|external-preview\.)?redd\.it/[^\s<>)\]]+(?!\))", " ", text)
     lines = [re.sub(r"\s{2,}", " ", ln).strip() for ln in text.splitlines()]
-    return "\n".join(ln for ln in lines if ln)
+    return _collapse_blanks(_line_stage(lines))
 
 
 def parse_icon_stats(line: str):
@@ -335,7 +387,7 @@ def parse_embeddit_post(data: dict):
         "title": title,
         "author": author,
         "subreddit": subreddit,
-        "body": "\n".join(body_lines),
+        "body": "\n".join(body_lines).strip(),
         "stats": stats,
         "media": media,
     }
