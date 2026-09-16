@@ -50,8 +50,9 @@ jobs:
         #   point this line back:
         #       run: python reddit_main.py      <- plain V1 (free)
         #       run: python reddit_main_v2.py   <- rich card (EmbedEZ key)
+        #       run: python reddit_main_v3.py   <- rich card (No API)
         # ───────────────────────────────────────────────────────────────────
-        run: python "testing area/reddit_maintest.py"   # ← switch to reddit_main_v2.py for the rich card
+        run: python "testing area/reddit_main.py"   # ← switch to reddit_main_v2.py for the rich card
 
       - name: Commit and push updated posted_reddit.json cache
         run: |
