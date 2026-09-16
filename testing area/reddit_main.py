@@ -35,9 +35,9 @@
 #         gammaspectra bot challenges (or dead). A few are kept ONLY as
 #         fallback lottery tickets.
 #
-# To use the rich Components V2 version instead (requires an EmbedEZ API key),
-# change the workflow run line to: python reddit_mainv2_embedez.py or 
-# reddit_mainv3.py
+# To use rich Components V2 version (V2 requires an EmbedEZ API key)
+# change the workflow run line to: python reddit_main_v2.py or 
+# reddit_mainv3.py (Does not require API)
 # ---------------------------------------------------------------------------
 import os
 import re
