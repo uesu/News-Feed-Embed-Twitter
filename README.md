@@ -94,19 +94,23 @@ and to [@dangered wolf](https://github.com/dangeredwolf), creator and lead devel
 │       ├── ci.yml                 # PR gate: install + compile + offline smoke test
 │       └── dependabot_auto_merge.yml  # opt-in auto-merge for Dependabot PRs (repo Variable)
 ├── docs/
-│   └── DEPENDABOT.md              # full plain-English Dependabot explanation
+│   ├── DEPENDABOT.md              # full plain-English Dependabot explanation
+│   ├── DISCOHOOK.md               # Discohook: what it's for, fully optional, safe to disable
+│   └── CI_SMOKE.md                # ci.yml + test_smoke.py: the required offline safety gate
 ├── main.py                        # X/Twitter — V1 (production copy)
 ├── testing area/                  # tested copies of every engine (see Testing area guide)
 │   ├── main_v2testpro.py / main_v2testproround10.py      # X V2 (buttons outside)
 │   ├── main_v3testpro.py / main_v3testproround10.py      # X V3 (buttons inside — ACTIVE)
 │   ├── reddit_maintest.py         # Reddit V1 (free, mirror auto-embed)
 │   ├── reddit_main_v2test.py      # Reddit V2 (Components V2 via EmbedEZ API)
-│   ├── reddit_main_v3test.py      # Reddit V3 (native media, no key — ACTIVE)
+│   ├── reddit_main_v3test.py      # Reddit V3 (proxy media + native fallback — ACTIVE)
+│   ├── reddit_proxy.py            # Reddit V3 proxy services (round 13: redditez/vxreddit/embeddit)
 │   └── video_diag.py              # X video tile diagnostic (round 10)
 ├── tests/
 │   └── test_smoke.py              # offline smoke test (run by ci.yml on every PR)
 ├── posted_tweets.json             # X cache (auto-committed) — start with: []
 ├── posted_reddit.json             # Reddit cache (auto-committed) — start with: []
+├── proxy_health.json              # proxy warm-up results (auto-committed, round 13)
 ├── PRIVACY_POLICY.md              # privacy policy (the bot collects no personal data)
 ├── TERMS_OF_SERVICE.md            # terms of service / acceptable use
 ├── requirements.txt               # feedparser, aiohttp, python-dotenv
@@ -481,6 +485,59 @@ Discord channel.
 * **Environment switches** (all optional — sane defaults without them):
   `YOUTUBE_MEDIA_EMBED` (default off), `REDDIT_OP_COMMENT` (default on),
   `DISCOHOOK_PREVIEW` (default on), `FEEDTOKEN_JSON_STAGGER` (default 65 s).
+
+### 🆕 Reddit V3 — round 13 (2026-09-16): proxy media services
+
+Native-mode card media now comes from the **public proxy services** before
+falling back to RSS — same services you tested by hand (all keyless, no
+credits, no API key):
+
+| Priority | Service | What the bot reads from it | Video audio |
+|---|---|---|---|
+| 1 | **redditez.com** (EmbedEZ) | keyless `search` API → stable key → bot embed page og: tags (photos as embedez media URLs, title/body/stats) | ✅ (playable mp4) |
+| 2 | **vxreddit.com** | bot embed page og: tags — every gallery photo as **full-res `i.redd.it`**, stats in `og:site_name` | ✅ (muxed `redditvideo.mp4`) |
+| 3 | **embeddit.deltandy.me** | Mastodon-style JSON API — **ALL gallery photos (20)**, body, stats, author | ✅ under ~50 MB (merged mp4) |
+
+* **Fallback chain (your spec):** redditez first; if it's down, or if its
+  page shows *"Failed to Get Post | EmbedEZ — Reddit returned a non-JSON
+  response"* (that message means the EmbedEZ backend behind redditez —
+  which fetches the post from Reddit for us — is down or unavailable at
+  that moment; a service-side failure, not a problem with the post), the
+  post falls through to **vxreddit**, then **embeddit** — the two most
+  uptime-reliable. Detected per post, not just at warm-up. Their own
+  URLs are mixed into the components-v2 card verbatim (Discord fetches each
+  media URL itself).
+* **Warm-up link test (your spec):** every run first probes all three with
+  one known post (default `HonkaiStarRail_leaks/1whbjbh`, override
+  `PROXY_WARMUP_POST`) and writes **`proxy_health.json`** (auto-committed).
+  Dead services are skipped for the run; if ALL three are dead, every
+  service is retried per post. Log lines: `[proxy warm-up] <service>: OK/DOWN`.
+* **Then the old native path:** if no service can serve a post, the round-12
+  RSS media path runs unchanged (RSS media → redlib harvest → thumbnail).
+  `PROXY_MEDIA=0` disables the proxy path entirely. **FULL MODE** (OAuth
+  app) and test posts are unaffected — proxies also make any-age test posts
+  work when the post JSON 403s.
+* **Videos are range-checked** before use (muxed mp4 with audio); if the
+  proxy video URL dies, the native `v.redd.it` DASH chain (with audio) runs
+  instead. Video posts still show **video only** (no duplicate poster).
+* **20-photo galleries = 2 containers** (10 media items each) — unchanged;
+  **crossposts** keep working (the proxy returns the crosspost's own
+  content; FULL MODE still fetches the original post).
+* **YouTube second message (your spec):** after the card lands, the bot
+  posts a **second plain message containing only the YouTube link** (Discord
+  shows the official preview — no buttons, nothing else). The card's own
+  YouTube thumbnail + animated `starwardspark3` button stay.
+  `YOUTUBE_LINK_MESSAGE=0` disables the second message.
+* **New switches** (repo Variables, all optional): `PROXY_MEDIA` (on),
+  `PROXY_WARMUP_POST` (`HonkaiStarRail_leaks/1whbjbh`),
+  `YOUTUBE_LINK_MESSAGE` (on), `EMBEDDIT_INSTANCE` (self-hosted override).
+* **`EMBEDEZ_API_KEY` is no longer used by V3** (the keyless public
+  endpoints replaced the paid API) — the repo secret can be deleted; only
+  the old V2 script needs it.
+* **Docs added:** [`docs/DISCOHOOK.md`](docs/DISCOHOOK.md) (Discohook =
+  preview-only here, **fully optional**, safe to disable — and why it isn't
+  relied on for posting) and [`docs/CI_SMOKE.md`](docs/CI_SMOKE.md)
+  (ci.yml + test_smoke.py = the **required** offline safety gate).
 
 ### 🧪 Reddit V3 — final testing & verification procedure (round 12)
 
@@ -961,8 +1018,13 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
   `REDDIT_FEED_TOKEN` secret** (round-9 section above) — with it, 429s should essentially stop.
 * **`ValueError: invalid literal for int() with base 16: 'None'`** — old V3 bug when FxTwitter returns
   `"color": null`; fixed via the `accent_from_color()` helper with a safe Twitter-blue default.
-* **`Deprecation` / `Node.js 20 is deprecated` warnings in Actions logs** — cosmetic, safe to ignore
-  (runs are forced onto Node 24).
+* **`Deprecation` / `Node.js 20 is deprecated` warnings in Actions logs** —
+  these appeared while the workflow still pinned old action versions
+  (`actions/checkout@v4`, `actions/setup-python@v5`, which run on the
+  deprecated Node 20 runtime). Dependabot's github-actions bump to **v7**
+  (Node 24 runtime) removed them — see the Node 20→24 FAQ in
+  [`docs/DEPENDABOT.md`](docs/DEPENDABOT.md). Cosmetic either way; your
+  Python scripts are unaffected.
 * **No run at 10-minute marks** — GitHub's native cron is best-effort; that's why the external
   cron-job.org trigger exists. Also note GitHub auto-disables `schedule:` after 60 days of repo
   inactivity — the cache auto-commits usually count as activity, and the external trigger is immune.
@@ -1014,6 +1076,55 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 ---
 
 ## 🗒 Changelog
+
+* **2026-09-16 — round 13 (Reddit V3 proxy media services + docs):**
+  * **Proxy media path (native mode):** card media now comes FIRST from the
+    public proxy services — **redditez.com (EmbedEZ) → vxreddit.com →
+    embeddit.deltandy.me** in that priority order (new module
+    `testing area/reddit_proxy.py`, keyless public APIs — no credits, no
+    API key). The winning service's own URLs are used verbatim in the
+    components-v2 card: **full-res photos, EVERY gallery photo (up to 20 =
+    2 containers), videos WITH audio, GIFs, plus 💬/ stats**. This fixes
+    the native-mode gaps from round 12: multi-photo galleries now post all
+    photos (the RSS content only inlines one), videos use each service's
+    muxed mp4 (with audio) and are range-checked before use, and any-age
+    test posts resolve from any service (post JSON 403 / outside the
+    100-entry feed window no longer matter).
+  * **Warm-up link test:** every run probes all three services in parallel
+    with one known post (default `HonkaiStarRail_leaks/1whbjbh`, override
+    `PROXY_WARMUP_POST`) and writes **`proxy_health.json`** (auto-committed
+    with the cache). Services proven dead are skipped for the run — unless
+    all three are dead, in which case every service is retried per post.
+    When a redditez page shows *"Failed to Get Post | EmbedEZ — Reddit
+    returned a non-JSON response"* it means the EmbedEZ backend (redditez's
+    engine, which fetches the post from Reddit for us) is down or
+    unavailable at that moment — a service-side failure detected **per
+    post** — and the post falls through to vxreddit/embeddit (the two most
+    uptime-reliable).
+  * **Native path kept as final fallback:** if every proxy fails for a
+    post, the round-12 native RSS path (RSS media → redlib harvest →
+    thumbnail) runs unchanged. `PROXY_MEDIA=0` disables the proxy path
+    entirely. FULL MODE (OAuth app) is untouched.
+  * **YouTube second message:** posts containing a YouTube link now also
+    send a **second, plain message with only the YouTube link** after the
+    card lands (Discord shows the official preview; no buttons). The card's
+    own YouTube thumb + animated `starwardspark3` button stay.
+    `YOUTUBE_LINK_MESSAGE=0` disables the second message.
+  * **Crossposts + 20-photo galleries:** unchanged — proxies return the
+    crosspost's own content (RSS/native paths still follow the original),
+    and 11–20 media items still render as **2 containers** (10 items each).
+  * **Docs:** new `docs/DISCOHOOK.md` (what Discohook is/does here —
+    **preview-only, fully optional, safe to disable**, and why it isn't
+    relied on for posting) and `docs/CI_SMOKE.md` (ci.yml + test_smoke.py
+    are the **required** offline safety gate — what they catch and why
+    auto-merge waits on them); `docs/DEPENDABOT.md` gains the
+    **Node 20 → 24** explanation (the deprecation warning vanished because
+    Dependabot auto-bumped `actions/checkout`/`setup-python` to v7).
+  * **Workflow:** `actions/checkout@v7` + `actions/setup-python@v7`
+    (Node 24 runtime, matches the verified 2026-09-15 run log); auto-commit
+    now also commits `proxy_health.json`; `EMBEDEZ_API_KEY` no longer
+    needed by V3 (the keyless proxy endpoints replaced the paid API — the
+    secret can be deleted; only old V2 uses it).
 
 * **2026-09-15 — round 12 (Reddit V3 polish, from live test-channel review):**
   * **All photos now post (native mode):** the RSS content is scanned for

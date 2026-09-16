@@ -9,6 +9,7 @@ Purpose (also used by CI as the safety gate for Dependabot PRs):
 """
 import os
 import sys
+import json
 import types
 import importlib.util
 
@@ -229,6 +230,124 @@ texts = [c["content"] for ct in p["components"] for c in ct["components"] if c.g
 check("op line in card", any("OP comment" in t for t in texts), str(texts))
 total = sum(len(t) for t in texts)
 check("char budget under 4000", total < 4000, str(total))
+
+# ---- 7. proxy media services (round 13, offline fixtures) ------------------
+proxy = load_module("smoke_reddit_proxy", "testing area/reddit_proxy.py")
+
+# 7.1 embeddit status-id codec (port of src/util/encode.ts — base-36:
+# 36-char alphabet "1234567890" + "a-z"; '{' (123) -> 123//36=3 -> '4',
+# 123%36=15 -> 'f')
+enc = proxy.status_id_encode({"type": "post", "id": "abc123", "merge": True})
+check("proxy: embeddit id encodes '{' as '4f'", enc.startswith("4f"), enc)
+check("proxy: embeddit id round-trips",
+      proxy.status_id_decode(enc) == json.dumps(
+          {"type": "post", "id": "abc123", "merge": True}, separators=(",", ":")), enc)
+
+# 7.2 og: meta parsing (multiple og:image = gallery, unescape, video tag)
+og_page = (
+    '<html><head>'
+    '<meta property="og:site_name" content="u/leaker on r/AnantaLeaks - ⬆️ 1234 | 💬 56"/>'
+    '<meta property="og:title" content="Heist mode &amp; more"/>'
+    '<meta property="og:description" content="line one\nline two"/>'
+    '<meta property="og:image" content="https://i.redd.it/aaa111.jpg"/>'
+    '<meta property="og:image" content="https://i.redd.it/bbb222.gif"/>'
+    '<meta property="og:video:secure_url" content="https://vxreddit.com/redditvideo.mp4?video_url=x"/>'
+    '</head><body></body></html>'
+)
+meta = proxy._og_meta(og_page)
+check("proxy: og:image collects all in order",
+      meta.get("og:image") == ["https://i.redd.it/aaa111.jpg", "https://i.redd.it/bbb222.gif"],
+      str(meta.get("og:image")))
+check("proxy: og values unescaped", meta.get("og:title") == "Heist mode & more", str(meta.get("og:title")))
+check("proxy: og:video captured",
+      str(meta.get("og:video:secure_url", "")).startswith("https://vxreddit.com/redditvideo.mp4"),
+      str(meta.get("og:video:secure_url")))
+
+# 7.3 stats-line parsing (both service formats)
+st = proxy.parse_icon_stats("💬 152  🔁 0  💜 573  👀 0")
+check("proxy: redditez icon stats", st == {"comments": 152, "ups": 573}, str(st))
+sm = proxy.VXREDDIT_STATS_RE.search("u/IdiotGaming on r/196 - ⬆️ 699 | 💬 29")
+check("proxy: vxreddit stats line",
+      bool(sm) and sm.group(1) == "IdiotGaming" and sm.group(3) == "699" and sm.group(4) == "29",
+      str(sm.groups() if sm else None))
+
+# 7.4 redditez search key extraction
+check("proxy: redditez search key",
+      proxy.parse_redditez_search({"success": True, "data": {"key": "search_abc", "site": "reddit"}})
+      == "search_abc")
+check("proxy: redditez search failure -> None",
+      proxy.parse_redditez_search({"success": False}) is None)
+
+# 7.5 embeddit JSON parsing (20-photo shape: title + body + stats + media)
+edd_fixture = {
+    "account": {"display_name": "u/Aikz21 (@ r/AnimeFigures)"},
+    "content": ('<a href="https://reddit.com/r/AnimeFigures/comments/1sqass3/x/">'
+                '<b>First time posting collection</b></a>'
+                '<br/><br/><div>So, I generally never post online.</div>'
+                '<br/><br/><div><b>⬆️ 305 • 💬 21</b></div>'),
+    "media_attachments": [
+        {"type": "image", "url": "https://preview.redd.it/aaa.jpg?width=4059&s=1"},
+        {"type": "image", "url": "https://preview.redd.it/bbb.gif?width=4074&s=2"},
+        {"type": "video", "url": "https://embeddit.deltandy.me/video/vid1/name.mp4"},
+    ],
+}
+res = proxy.parse_embeddit_post(edd_fixture)
+check("proxy: embeddit title", res and res["title"] == "First time posting collection",
+      str(res and res.get("title")))
+check("proxy: embeddit author + subreddit",
+      res and res["author"] == "Aikz21" and res["subreddit"] == "AnimeFigures",
+      str(res and (res.get("author"), res.get("subreddit"))))
+check("proxy: embeddit stats", res and res["stats"] == {"ups": 305, "comments": 21},
+      str(res and res.get("stats")))
+check("proxy: embeddit body keeps middle lines only",
+      res and res["body"] == "So, I generally never post online.", str(res and res.get("body")))
+check("proxy: embeddit media kinds (image, gif, video)",
+      res and [m["kind"] for m in res["media"]] == ["image", "gif", "video"],
+      str(res and res["media"]))
+check("proxy: embeddit bad data -> None", proxy.parse_embeddit_post({"nope": 1}) is None)
+
+# 7.6 fallback chain + warm-up health skipping (fakes, no network)
+async def _fake_rr(session, path, label=""):
+    return None
+
+async def _fake_vx(session, path, label=""):
+    return {"service": "vxreddit", "title": "T", "author": "a", "subreddit": None,
+            "body": "b", "stats": {"ups": 1, "comments": 2},
+            "media": [{"kind": "image", "url": "https://i.redd.it/x.jpg"}]}
+
+async def _fake_ed(session, path, label=""):
+    return {"service": "embeddit", "title": "T", "author": "a", "subreddit": None,
+            "body": "b", "stats": None,
+            "media": [{"kind": "image", "url": "https://preview.redd.it/y.jpg?s=1"}]}
+
+orig_rr, orig_vx, orig_ed = proxy._fetch_redditez, proxy._fetch_vxreddit, proxy._fetch_embeddit
+proxy._fetch_redditez, proxy._fetch_vxreddit, proxy._fetch_embeddit = _fake_rr, _fake_vx, _fake_ed
+r1 = asyncio.run(proxy.fetch_proxy_post(None, "/r/X/comments/abc/", label="t", health={}))
+check("proxy: falls through to vxreddit when redditez has no data",
+      r1 and r1["service"] == "vxreddit", str(r1))
+r2 = asyncio.run(proxy.fetch_proxy_post(None, "/r/X/comments/abc/", label="t",
+                                        health={"vxreddit": {"ok": False}}))
+check("proxy: warm-up-dead service is skipped (embeddit wins)",
+      r2 and r2["service"] == "embeddit", str(r2))
+r3 = asyncio.run(proxy.fetch_proxy_post(None, "/r/X/comments/abc/", label="t",
+                                        health={s: {"ok": False} for s in proxy.PROXY_SERVICES}))
+check("proxy: ALL-dead health still retries every service",
+      r3 and r3["service"] == "vxreddit", str(r3))
+proxy._fetch_redditez, proxy._fetch_vxreddit, proxy._fetch_embeddit = orig_rr, orig_vx, orig_ed
+
+# 7.7 health file round-trip
+import tempfile
+orig_health_file = proxy.PROXY_HEALTH_FILE
+with tempfile.TemporaryDirectory() as _td:
+    proxy.PROXY_HEALTH_FILE = os.path.join(_td, "health.json")
+    proxy.save_proxy_health({"post": "X/y",
+                             "services": {"redditez": {"ok": True, "detail": "1 media item(s)"}}})
+    loaded = proxy.load_proxy_health()
+    check("proxy: health file round-trip",
+          loaded.get("redditez", {}).get("ok") is True, str(loaded))
+    proxy.PROXY_HEALTH_FILE = os.path.join(_td, "missing.json")
+    check("proxy: missing health file -> {}", proxy.load_proxy_health() == {})
+proxy.PROXY_HEALTH_FILE = orig_health_file
 
 print()
 if failures:

@@ -95,6 +95,25 @@
 #       feed (/comments/<id>/.rss) — works for ANY post age, not just the
 #       combined feed's 100-entry window. Native photo path now logs how
 #       many media URLs the RSS content carries (gallery diagnostics).
+#   12. (round 13) PROXY MEDIA: native-mode card media now comes FIRST from
+#       the public proxy services — redditez.com (EmbedEZ) -> vxreddit.com
+#       -> embeddit.deltandy.me, in that priority order (see testing
+#       area/reddit_proxy.py). Each service's own URLs are used verbatim in
+#       the components-v2 card: full-res photos, EVERY gallery photo (up to
+#       20 = 2 containers), videos WITH audio, GIFs, plus stats. A per-run
+#       warm-up probes all three with one known post and writes
+#       proxy_health.json (auto-committed); services proven dead are
+#       skipped for the run. When a redditez page shows "Failed to Get Post
+#       | EmbedEZ" its backend (the part that fetches the post from Reddit
+#       for us) is down or unavailable at that moment — a service-side
+#       failure, detected per post — and the post falls through to the next
+#       service.
+#       If every proxy fails for a post, the round-12 native RSS path is
+#       used unchanged. PROXY_MEDIA=0 disables the proxy path.
+#   13. (round 13) YouTube posts also send a SECOND, plain message
+#       containing ONLY the YouTube link (Discord's official preview) after
+#       the card lands — waits for the first post (YOUTUBE_LINK_MESSAGE=0
+#       disables; the card's own thumb + button stay).
 #
 # ■ WORKFLOW: identical to V1/V2. Test-area first:
 #   run: python "testing area/reddit_main_v3test.py"
@@ -211,6 +230,28 @@ DISCOHOOK_PREVIEW = _env_flag("DISCOHOOK_PREVIEW", "1")
 DISCOHOOK_SHARE_ENDPOINT = "https://discohook.app/api/v1/share"
 DISCOHOOK_SHARE_TTL = 7 * 24 * 3600  # 7 days (API max: 28)
 DISCOHOOK_USER_AGENT = "python:uesu.news-feed-embed:v3 (discohook share preview)"
+
+# ---------------------------------------------------------------------------
+# ■ PROXY MEDIA SERVICES (round 13) — see testing area/reddit_proxy.py
+# ---------------------------------------------------------------------------
+# Native-mode card media now comes from the public proxy services FIRST:
+# redditez.com (EmbedEZ) -> vxreddit.com -> embeddit.deltandy.me, in that
+# priority order. The winning service's own URLs are used verbatim in the
+# card (full-res photos, every gallery photo, videos WITH audio, GIFs).
+PROXY_MEDIA = _env_flag("PROXY_MEDIA", "1")        # '0' disables the proxy path entirely
+YOUTUBE_LINK_MESSAGE = _env_flag("YOUTUBE_LINK_MESSAGE", "1")
+# '0' stops the SECOND plain YouTube-link message (the card's own YouTube
+# thumb + button are unaffected).
+
+try:
+    import reddit_proxy
+except Exception as _proxy_import_error:
+    # A missing/corrupt module must never break the run — the native RSS
+    # media path (round 12) still works on its own.
+    reddit_proxy = None
+    logging.warning(f"reddit_proxy module unavailable — native media only: {_proxy_import_error}")
+
+_proxy_health = None   # per-run warm-up result (set in main(), read in resolve_post_media)
 
 # Native reddit video ladder: v.redd.it DASH_<q>.mp4 files are self-contained
 # mp4s (h264 + AAC). 404s answer instantly, so the ladder is cheap.
@@ -1080,9 +1121,13 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
     """
     Builds the final media list + meta for one post.
     media = [{"kind": "image"|"gif"|"video", "url": ...}, ...]
-    Round-12 rules:
+    Round-12/13 rules:
       • video posts -> the VIDEO tile ONLY (no first-frame / external thumb)
       • photo posts -> ALL photos, best rendition each (never the 140px thumb)
+      • round 13 (native mode): the proxy services (redditez/vxreddit/
+        embeddit) are tried FIRST — they provide every gallery photo and
+        videos WITH audio; on any failure the round-12 RSS/redlib path runs
+      • stats: post JSON (FULL MODE) or the proxy services (round 13 native)
       • external-preview.redd.it screenshots dropped whenever a video resolves
     """
     media: list[dict] = []
@@ -1196,9 +1241,51 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
         yt_vid_early, _ = extract_youtube_id(yt_url)
         has_video = bool(vid or yt_vid_early or base.get("redgifs_url"))
 
+    # ---- round 13: PROXY media services (native mode only) ---------------
+    # redditez.com -> vxreddit.com -> embeddit.deltandy.me, in that priority
+    # order (see testing area/reddit_proxy.py). The winning service's own
+    # URLs are used verbatim: full-res photos, EVERY gallery photo (20 ->
+    # 2 containers), videos WITH audio, GIFs. The per-run warm-up
+    # (proxy_health.json) skips services already proven dead this run.
+    # Any failure here simply falls through to the round-12 native path.
+    proxy_media_used = False
+    if not post_json and PROXY_MEDIA and reddit_proxy is not None and path:
+        proxy = await reddit_proxy.fetch_proxy_post(session, path,
+                                                    label=label, health=_proxy_health)
+        if proxy:
+            proxy_media = []
+            for m in proxy["media"]:
+                if m["kind"] == "video":
+                    # range-check the muxed mp4; if it died, drop the whole
+                    # proxy result so the native DASH chain (with audio) runs
+                    ok, size = await media_url_ok(session, m["url"], timeout=90, video=True)
+                    if ok:
+                        logging.info(f"[{label or 'proxy'}] proxy video OK via "
+                                     f"{proxy['service']} ({size} bytes).")
+                        proxy_media.append(m)
+                    else:
+                        logging.info(f"[{label or 'proxy'}] {proxy['service']} video URL "
+                                     f"failed the range check — native video chain will run.")
+                        proxy_media = None
+                        break
+                else:
+                    proxy_media.append(m)
+            if proxy_media:
+                media = proxy_media
+                stats = proxy.get("stats")
+                if proxy.get("body"):
+                    body = proxy["body"][:MAX_BODY_CHARS]
+                proxy_media_used = True
+                logging.info(f"[{label or 'proxy'}] card media via {proxy['service']} "
+                             f"— {len(media)} item(s).")
+            else:
+                logging.info(f"[{label or 'proxy'}] no usable proxy media — "
+                             f"falling back to the native RSS path.")
+
     # ---- VIDEO FIRST (round 12): the tile is the video, never a dup thumb
     video_url = None
-    if vid and not any(x["kind"] in ("video", "gif") for x in media):
+    if (not proxy_media_used and vid
+            and not any(x["kind"] in ("video", "gif") for x in media)):
         video_url = await resolve_video_url(session, vid, fallback_url)
 
     if video_url:
@@ -1207,7 +1294,10 @@ async def resolve_post_media(session: aiohttp.ClientSession, base: dict,
         media = [x for x in media
                  if x["kind"] in ("video", "gif") or not _is_external_preview(x["url"])]
     else:
-        if not post_json:
+        if proxy_media_used and any(x["kind"] == "video" for x in media):
+            # round 13: the proxy video tile only (no first-frame / poster dup)
+            media = [x for x in media if x["kind"] in ("video", "gif")]
+        elif not post_json:
             # ---- NATIVE MODE media (no reddit video resolved) ----
             if base.get("redgifs_url"):
                 ok, _ = await media_url_ok(session, base["redgifs_url"], timeout=30, video=True)
@@ -1448,6 +1538,14 @@ async def main():
     use_oauth = bool(REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET)
 
     async with aiohttp.ClientSession() as session:
+        # ---- round 13: proxy warm-up (writes proxy_health.json) ----------
+        global _proxy_health
+        if PROXY_MEDIA and reddit_proxy is not None:
+            _proxy_health = await reddit_proxy.proxy_warmup(session)
+        else:
+            logging.info("Proxy media off (PROXY_MEDIA=0 or module missing) — "
+                         "native media only.")
+
         # ---- TEST POST mode (round 12): rebuild one specific post --------
         if TEST_POST_ID:
             logging.info(f"TEST POST mode: {TEST_POST_ID} (dry_run={DRY_RUN}) — "
@@ -1543,13 +1641,36 @@ async def main():
                     }
                 else:
                     base = await fetch_test_post_base(session, path, TEST_POST_ID)
+                    if not base and PROXY_MEDIA and reddit_proxy is not None:
+                        # round 13: build a minimal base from a proxy service
+                        # (title/author/body) so the test post still works
+                        # when no RSS/redlib source has the post — media is
+                        # then resolved from the same service in
+                        # resolve_post_media.
+                        proxy = await reddit_proxy.fetch_proxy_post(session, path,
+                                                                    label=TEST_POST_ID,
+                                                                    health=_proxy_health)
+                        if proxy and proxy.get("title"):
+                            base = {
+                                "title": str(proxy["title"])[:400],
+                                "author": proxy.get("author") or "unknown",
+                                "content_html": proxy.get("body") or "",
+                                "thumb": None,
+                                "body": proxy.get("body") or "",
+                                "vred_id": None,
+                                "redgifs_url": None,
+                                "youtube_url": extract_youtube_url(proxy.get("body") or ""),
+                            }
+                            logging.info(f"[{TEST_POST_ID}] test post base built from "
+                                         f"proxy service {proxy['service']}.")
                     if not base:
                         logging.error(f"TEST POST {TEST_POST_ID}: post JSON unavailable "
                                       f"(native mode), and the post is neither in the "
                                       f"combined feed (100-entry window), its own RSS "
-                                      f"feed, nor any redlib instance — cannot build "
-                                      f"the test post. Add REDDIT_CLIENT_ID/SECRET "
-                                      f"secrets for reliable testing.")
+                                      f"feed, any redlib instance, nor any proxy "
+                                      f"service (redditez/vxreddit/embeddit) — cannot "
+                                      f"build the test post. Add REDDIT_CLIENT_ID/"
+                                      f"SECRET secrets for reliable testing.")
                         continue
 
             try:
@@ -1565,6 +1686,9 @@ async def main():
                                  f"(media={kinds} | {mode} | {len(data['media'])} item(s))")
                     logging.info(f"DRY RUN payload for {unique_key}:\n"
                                  f"{json.dumps(payload, indent=2, ensure_ascii=False)}")
+                    if data.get("youtube_url") and YOUTUBE_LINK_MESSAGE:
+                        logging.info(f"DRY RUN 2nd message for {unique_key} "
+                                     f"(YouTube link only): {data['youtube_url']}")
                     continue
 
                 target_url = f"{webhook_url}?with_components=true"
@@ -1577,6 +1701,28 @@ async def main():
                         logging.info(f"Reddit V3 Posted: {unique_key} (media={kinds} | {mode} | "
                                      f"{len(data['media'])} item(s))")
                         await create_discohook_share(session, payload, unique_key)
+                        # round 13: YouTube posts get a SECOND, plain message
+                        # containing ONLY the YouTube link (Discord shows the
+                        # official preview for a bare link). It waits for the
+                        # card above to land first; the card's own YouTube
+                        # thumb + animated button stay as they are.
+                        if data.get("youtube_url") and YOUTUBE_LINK_MESSAGE:
+                            try:
+                                async with session.post(
+                                    webhook_url,
+                                    json={"content": data["youtube_url"]},
+                                    timeout=aiohttp.ClientTimeout(total=15),
+                                ) as yt_resp:
+                                    if yt_resp.status in (200, 204):
+                                        logging.info(f"YouTube link message posted: "
+                                                     f"{data['youtube_url']}")
+                                    else:
+                                        logging.error(f"YouTube link message "
+                                                      f"HTTP {yt_resp.status}: "
+                                                      f"{(await yt_resp.text())[:200]}")
+                            except Exception as yt_e:
+                                logging.error(f"YouTube link message failed: {yt_e}")
+                            await asyncio.sleep(1.0)
                         await asyncio.sleep(1.5)
                     else:
                         body = await resp.text()

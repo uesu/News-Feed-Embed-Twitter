@@ -50,8 +50,9 @@ With the config in this repo (`.github/dependabot.yml`):
 
 * **Every week** (schedule: `interval: weekly`), Dependabot checks:
   * **pip**: `requirements.txt` → `feedparser`, `aiohttp`, `python-dotenv`
-  * **github-actions**: every workflow's `actions/checkout@v4`,
-    `actions/setup-python@v5`, `actions/github-script@v7`, …
+  * **github-actions**: every workflow's `actions/checkout@v7`,
+    `actions/setup-python@v7`, … (the old v4/v5 pins were auto-bumped to
+    v7 by Dependabot itself — see the Node 20→24 FAQ below)
 * For each outdated dependency it opens (or updates) **one PR per
   dependency**, labeled `dependencies` (+ `python` / `github-actions`),
   with a commit prefix like `deps(python): bump aiohttp from 3.9.5 to 3.10.11`.
@@ -164,6 +165,19 @@ description): treat as higher priority — review the advisory, then merge.
 
 ## 8. FAQ
 
+* **"The 'Node.js 20 is deprecated' warning in my workflow logs is gone —
+  is that because of the dependency auto-updates?"** Yes. GitHub's hosted
+  runners deprecate **Node 20 as the runtime for GitHub Actions**, and older
+  action versions (`actions/checkout@v4`, `actions/setup-python@v5`) still
+  ran on it — which is what produced the warning line on every run.
+  Dependabot opened a **github-actions** PR bumping those to **v7** (which
+  run on **Node 24**), you merged it (or auto-merge did), and the warning
+  disappeared. It was never a problem with *your* code or your Python
+  scripts — just the runtime of the helper actions. You can verify it in
+  any recent workflow log: it now downloads
+  `actions/checkout@v7` / `actions/setup-python@v7` (see the 2026-09-15
+  Reddit V1 run log — no deprecation warning). This is Dependabot doing
+  exactly its job on the github-actions ecosystem.
 * **"Will Dependabot break my `posted_reddit.json` / caches?"** No — it
   doesn't touch data files, only dependency pins.
 * **"What if a bump breaks the live workflow?"** The next run logs the
