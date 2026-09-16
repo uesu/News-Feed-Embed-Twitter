@@ -1,11 +1,11 @@
 # ---------------------------------------------------------------------------
-# ■ Full Components V2 Edition — main_v2.py
+# ■ Full Components V2 Edition — twitter_v2.py
 # ---------------------------------------------------------------------------
-# This is a separate file — your V1 main.py and V3 main_v3.py stay untouched.
-# To use it: change the workflow's `run: python main.py` line to
-#            `run: python main_v2.py`
+# This is a separate file — your V1 twitter_v1.py and V3 twitter_v3.py stay untouched.
+# To use it: change the workflow's `run: python twitter_v1.py` line to
+#            `run: python twitter_v2.py`
 #
-# Same behavior as main_v3.py, but the action row is a SEPARATE component
+# Same behavior as twitter_v3.py, but the action row is a SEPARATE component
 # OUTSIDE/BELOW the type-17 container (classic V2 look).
 #
 # ■ What's new in this revision (2026-09-11, round 4):
