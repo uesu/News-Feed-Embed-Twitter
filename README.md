@@ -100,7 +100,7 @@ and to [@dangered wolf](https://github.com/dangeredwolf), creator and lead devel
 │   └── CI_SMOKE.md                # ci.yml + test_smoke.py: the required offline safety gate
 ├── twitter_v1.py                  # X/Twitter — V1 (production copy)
 ├── testing area/                  # tested copies of every engine (see Testing area guide)
-│   ├── twitter_v2_button_outside.py      # X V2 (buttons outside)
+│   ├── twitter_v2_button_outside.py     # X V2 (buttons outside)
 │   ├── twitter_v3.py              # X V3 (buttons inside — ACTIVE)
 │   ├── reddit_main.py             # Reddit V1 (free, mirror auto-embed)
 │   ├── reddit_main_v2_embedez.py  # Reddit V2 (Components V2 via EmbedEZ API)
