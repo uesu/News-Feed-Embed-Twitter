@@ -116,7 +116,7 @@
 #       disables; the card's own thumb + button stay).
 #
 # ■ WORKFLOW: identical to V1/V2. Test-area first:
-#   run: python "testing area/reddit_main_v3test.py"
+#   run: python "testing area/reddit_main_v3.py"
 #   On pass → copy to reddit_main_v3.py and point the run line at it.
 # ---------------------------------------------------------------------------
 import os
