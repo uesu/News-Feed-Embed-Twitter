@@ -61,13 +61,13 @@ for rel in SCRIPTS:
     try:
         m = load_module("smoke_" + rel.replace(os.sep, "_").replace(" ", "_"), rel)
         check(f"import {rel}", True)
-        if rel.endswith("reddit_main_v3test.py"):
+        if rel.endswith("reddit_main_v3.py"):
             v3 = m
     except Exception as e:
         check(f"import {rel}", False, repr(e))
 
 if v3 is None:
-    print("FATAL: reddit_main_v3test.py could not be imported.")
+    print("FATAL: reddit_main_v3.py could not be imported.")
     sys.exit(1)
 
 # ---- 2. body cleaning -----------------------------------------------------
