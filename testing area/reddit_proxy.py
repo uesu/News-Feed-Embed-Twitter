@@ -213,6 +213,10 @@ def _line_stage(lines: list) -> list:
             continue
         if re.match(r"^submitted\)?\s+by\s+\[?\s*/?u/", line, re.I):
             continue
+        # merged linked footer on ONE line ("[](url) submitted by [/u/x](url)
+        # to [r/y](url)") — the feed emits it merged, so an anchored rule misses it
+        if re.search(r"submitted\s+by\s+\[?\s*/?u/", line, re.I):
+            continue
         if re.fullmatch(r"\[\s*\]\]?\(https?://\S+\)", line):
             continue
         if re.fullmatch(r"[^\s\[\]]+\]\(https?://\S+?\)?", line):

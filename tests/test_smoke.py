@@ -458,6 +458,9 @@ for module in (v3, proxy):
     check("r15 footer repair", cleaner(
         "[ ](https://reddit.com/post)\nsubmitted](https://reddit.com/post)\n"
         "submitted) by [ /u/name_ ](https://reddit.com/u/name_) to [r/sub](https://reddit.com/r/sub)") == "")
+    check("r15 merged linked footer dropped", cleaner(
+        "[](https://www.reddit.com/r/Sub/comments/1abc/) submitted by "
+        "[/u/name_](https://www.reddit.com/user/name_/) to [r/Sub](https://www.reddit.com/r/Sub/)") == "")
     check("r15 paragraph spacing", cleaner("<p>First</p><p>Second</p>") == "First\n\nSecond")
     check("r15 hidden video URL", cleaner("<p>https://v.redd.it/abc</p>") == "")
     check("r15 linked HTML footer", cleaner('<span>submitted by <a href="https://reddit.com/u/name">/u/name</a> to <a href="https://reddit.com/r/sub">r/sub</a></span>') == "")
