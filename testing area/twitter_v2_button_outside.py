@@ -676,10 +676,20 @@ async def fetch_tweet_details(session: aiohttp.ClientSession, account: str, twee
                               lang_suffix: str = "") -> dict | None:
     """
     Fetches tweet data from FxTwitter's API using the PLAIN-ID path
-    (/status/:id). The screen-name path (/<name>/status/:id) returns 404 for
-    reposts of other authors' tweets, X Articles, and some newer tweets —
-    verified live — while the plain-ID path resolves all of them. The true
-    author is read from the payload afterwards. lang_suffix: '/en' etc.
+    (/status/:id). The true author is read from the payload afterwards
+    (which is what round-13 repost detection relies on), so a REPOST
+    resolves to the ORIGINAL author, never the feed account.
+    lang_suffix: '/en' etc.
+
+    CORRECTED 2026-09-17: an earlier version of this comment claimed the
+    screen-name path (/<name>/status/:id) returns 404 for reposts of other
+    authors' tweets, X Articles and some newer tweets. Re-verified live on
+    2026-09-17 — that is NO LONGER TRUE. FxTwitter resolves purely by tweet
+    id and ignores the screen name in the path: api.fxtwitter.com/<anything>
+    /status/2099456877558202445 returns HTTP 200 with the correct @zeroartwo
+    payload, even for a screen name that does not exist. The plain-id path
+    is kept because it is the shortest form and cannot drift out of sync
+    with the payload's author — NOT because the other path 404s.
     """
     url = f"{FXTWITTER_API_BASE}/status/{tweet_id}{lang_suffix}"
     headers = {"User-Agent": "NewsFlashBot/3.0"}
