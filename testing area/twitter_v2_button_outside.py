@@ -31,9 +31,12 @@
 #     in the gallery are re-pointed through FxTwitter's embed proxy
 #     (api.fxtwitter.com/2/go?url=...), the exact URL V1 embeds use, which
 #     plays them correctly.
-#   • /status/:id API path — the screen-name path 404s for reposts/articles/
-#     some newer tweets (verified live); the plain-ID path always resolves.
-#     Read Post links use the TRUE author from the payload.
+#   • /status/:id API path — FxTwitter resolves purely by tweet id and
+#     ignores the screen name in the path (re-verified 2026-09-17: even a
+#     nonexistent handle returns 200 with the correct payload, so the old
+#     "screen-name path 404s for reposts/articles" note no longer holds).
+#     Plain-ID is used as the shortest form. Read Post links use the TRUE
+#     author from the payload.
 #   • "Replying to @user" line when the tweet is a reply.
 #   • Custom animated button emoji (starwardhmm / starward11 / starwardfans).
 #   • ROUND 5 (2026-09-11): portrait proxy-wrap retracted to an opt-in
