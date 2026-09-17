@@ -432,6 +432,28 @@ automatically posts the missed 2026-09-17 tweets (WW song credits + video,
 the 08:00 wallpaper, the TYPEII_EN repost of @zeroartwo, and the Ananta_EN
 11:37 giveaway-winner announcement) — no manual action needed.
 
+## 🆕 X V2/V3 — round 13 (2026-09-17): repost attribution
+
+When a tracked account **reposts** (retweets) someone else's tweet, the card
+now says who did the reposting instead of presenting it as the original
+author's own tweet:
+
+* **Header:** `### [TYPEII_EN reposted](https://x.com/TYPEII_EN)` — the
+  reposting account (screen name, per 2026-09-17) linking to its profile.
+* **Original line under the header:** `-# 📌 Original: [円 (@zeroartwo)](https://x.com/zeroartwo)`
+  so the true author stays visible.
+* Everything else is unchanged: the *Read Post* button still opens the
+  original tweet, stats/timestamp are the original's, translation and media
+  work exactly as before.
+
+**How it's detected (no new API needed):** a nitter feed for an account
+contains only that account's own tweets and its reposts — so when the true
+author returned by the tweet-data API differs from the feed account, the
+entry is a repost by the feed account. (FxEmbed's payload does include a
+`reposted_by` field, but it is only set when the RETWEET's own status id is
+queried; nitter RSS links point at the original author's status, so the feed
+itself is the signal.)
+
 ## 🌐 How translation works (all versions)
 
 1. The script fetches the tweet from the FxTwitter API and reads its `lang` field.
@@ -1321,6 +1343,15 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 ---
 
 ## 🗒 Changelog
+
+* **2026-09-17 — round 13 (X V3): repost attribution** — a reposted tweet
+  now shows `[<account> reposted](https://x.com/<account>)` in the header
+  (e.g. `[TYPEII_EN reposted](https://x.com/TYPEII_EN)`) plus a
+  `📌 Original:` line naming the true author, instead of impersonating the
+  original author's own tweet. Detected from the feed itself (author from
+  the tweet-data API ≠ feed account — FxEmbed's `reposted_by` field only
+  works with the retweet's own id, which nitter RSS doesn't carry); Read
+  Post, stats, translation and media are unchanged.
 
 * **2026-09-17 — round 12 (X V3): nitter fleet resilience + visible failures
   + TEST_TWEET_ID + RSS-token support** (the X monitor silently no-oped on
