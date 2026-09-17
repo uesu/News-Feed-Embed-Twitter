@@ -1344,6 +1344,27 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 ## 🗒 Changelog
 
+* **2026-09-17 — X V2 catch-up: rounds 11 + 12 backported from V3** (V2 is
+  the standby engine — `twitter_monitor.yml` still runs V3, so live output
+  is unchanged):
+  * **Round 11 — tweet-data fallback chain.** V2 now uses the shared
+    `twitter_proxy` chain (FxTwitter → fixupx → vxtwitter → twitterez)
+    via a soft import, so it no longer depends on FxTwitter alone. The
+    `/en` translation call is now attempted only when the data really came
+    from FxTwitter (the backup services have no `/en` endpoint), and the
+    winning service is logged as `source=...`.
+  * **Round 12 — nitter fleet.** V2's `RSS_INSTANCES` was still the old
+    4-instance list (all stale/dead in round 12's probes); it now uses the
+    same refreshed 11-instance fleet as V3. Every attempt is logged per
+    instance, a dead fleet raises `NO working nitter instance` /
+    `ALL FEEDS FAILED this run`, `NITTER_RSS_TOKEN` unlocks the
+    token-gated instance, and `TEST_TWEET_ID` can rebuild one tweet
+    nitter-free.
+  * **Bugfix found while porting:** V2 computed the first-run limit
+    (`entries`) but then iterated `feed.entries`, so a first run posted
+    *every* feed entry instead of just the newest. It now iterates
+    `entries`, matching V3.
+
 * **2026-09-17 — round 13 (X V3): repost attribution** — a reposted tweet
   now shows `[<account> reposted](https://x.com/<account>)` in the header
   (e.g. `[TYPEII_EN reposted](https://x.com/TYPEII_EN)`) plus a
