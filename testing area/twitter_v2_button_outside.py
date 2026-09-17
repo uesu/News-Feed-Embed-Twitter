@@ -724,7 +724,8 @@ def build_v2_payload(account: str, tweet: dict, read_post_url: str,
                      display_text: str | None = None, posted_ts: int | None = None,
                      gallery_items: list | None = None, media_notes: list | None = None,
                      quote_components: list | None = None, reply_line: str | None = None,
-                     lead_gallery_items: list | None = None) -> dict:
+                     lead_gallery_items: list | None = None,
+                     repost_account: str | None = None) -> dict:
     """Constructs the V2 layout; the action row sits OUTSIDE the container."""
     author = tweet.get("author", {}) or {}
     author_name = (author.get("name") or "").strip() or account
@@ -750,9 +751,22 @@ def build_v2_payload(account: str, tweet: dict, read_post_url: str,
     likes = tweet.get("likes", 0)
     views = tweet.get("views", "N/A")
 
-    inner_components = [
-        {"type": 10, "content": f"### [{author_name}](https://x.com/{screen_name}) just tweeted:"},
-    ]
+    if repost_account:
+        # round 13 (2026-09-17): repost — attribute the account that reposted
+        # it (screen name as the label, per 2026-09-17), and keep the true
+        # author visible on the line below.
+        inner_components = [
+            {"type": 10,
+             "content": (f"### [{repost_account} reposted]"
+                         f"(https://x.com/{repost_account})")},
+            {"type": 10,
+             "content": (f"-# 📌 Original: [{author_name} "
+                         f"(@{screen_name})](https://x.com/{screen_name})")},
+        ]
+    else:
+        inner_components = [
+            {"type": 10, "content": f"### [{author_name}](https://x.com/{screen_name}) just tweeted:"},
+        ]
     if reply_line:
         inner_components.append({"type": 10, "content": reply_line})
     if lead_gallery_items:  # ROUND 10: article cover, shown right under the header
@@ -826,6 +840,18 @@ async def main():
                 author_data = tweet_data.get("author", {}) or {}
                 author_screen = author_data.get("screen_name") or account
                 read_post_url = f"https://fxtwitter.com/{author_screen}/status/{tweet_id}"
+
+                # round 13 (2026-09-17): repost detection. A nitter feed for
+                # an account contains only that account's own tweets and its
+                # reposts — so when the TRUE author from the payload differs
+                # from the feed account, this entry is a REPOST by the feed
+                # account. (FxEmbed's payload does carry a `reposted_by` field,
+                # but it is only populated when the RETWEET's own status id is
+                # queried — the nitter RSS links point at the ORIGINAL
+                # author's status, so the feed itself is the signal.)
+                repost_account = (account
+                                  if author_screen.lower() != account.lower()
+                                  else None)
                 status_page_url = f"https://x.com/{author_screen}/status/{tweet_id}"
                 display_text = None
 
@@ -910,7 +936,8 @@ async def main():
                                            display_text=display_text, posted_ts=posted_ts,
                                            gallery_items=gallery_items, media_notes=media_notes,
                                            quote_components=quote_components, reply_line=reply_line,
-                                           lead_gallery_items=lead_gallery)
+                                           lead_gallery_items=lead_gallery,
+                                           repost_account=repost_account)
                 target_url = f"{webhook_url}?with_components=true"
                 async with session.post(target_url, json=payload) as resp:
                     if resp.status in (200, 204):
