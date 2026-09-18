@@ -51,6 +51,9 @@ PROXY_BOT_UA = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com
 # the most uptime-reliable and are the fallbacks.
 PROXY_SERVICES = ("redditez", "vxreddit", "embeddit")
 
+# Round 25: two gallery containers x ten items; nothing more fits a card.
+MEDIA_CAP_ITEMS = 20
+
 # --- redditez / EmbedEZ (keyless public API) --------------------------------
 REDDITEZ_SEARCH_ENDPOINT = "https://embedez.com/api/v1/providers/search"
 REDDITEZ_EMBED_PAGE = "https://embedez.com/embed/{key}"
@@ -784,16 +787,13 @@ async def fetch_embeddit_stats(session, path: str, label: str = ""):
 # ---------------------------------------------------------------------------
 # ■ Fallback chain + warm-up
 # ---------------------------------------------------------------------------
-# round 25: stop once the card capacity (10 items x 2 galleries) is met.
-MEDIA_CAP_ITEMS = 20
-
-
 async def fetch_proxy_post(session, path: str, label: str = "",
                            health: dict | None = None,
                            need_video: bool = False) -> dict | None:
     """Try the proxy services in priority order and return the normalized
     result with the MOST media (photos / GIFs / video). Round 25:
     partial results no longer stop the chain; ties keep service priority.
+    The winning media list is copied and capped at MEDIA_CAP_ITEMS.
     A text/stats-only result never stops the chain (round 23, 2026-09-18):
     a service can have the post's text but not (yet) its images — e.g. a
     gallery post minutes after posting, when the og:image tags have not
@@ -870,6 +870,11 @@ async def fetch_proxy_post(session, path: str, label: str = "",
                          f"continuing the chain for the media.")
         logging.info(f"[{label}] {service} had no usable data — trying the next proxy.")
     if best_media_result is not None:
+        # Cap a copy: never mutate the service's original result/list.
+        best_media_result = dict(best_media_result)
+        best_media_result["media"] = best_media_result["media"][:MEDIA_CAP_ITEMS]
+        logging.info(f"[{label}] proxy media winner — "
+                     f"{len(best_media_result['media'])} item(s).")
         return best_media_result
     return fallback_result
 

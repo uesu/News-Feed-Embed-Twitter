@@ -192,7 +192,8 @@
 #       wired in; revisit once playback is fixed.
 #   21. (round 25, 2026-09-18) MOST-COMPLETE-MEDIA-WINS (1wj0p83):
 #       proxy chain keeps the largest media list, ties keep priority,
-#       and 20 items reach card capacity. Archive posts with a known
+#       and the returned list is capped at 20 (card capacity). The chain
+#       stops early at capacity. Archive posts with a known
 #       larger gallery count skip without caching and retry within the
 #       48h window. Unknown counts and video cards are exempt.
 #       This reduces partial galleries; it cannot prove completeness

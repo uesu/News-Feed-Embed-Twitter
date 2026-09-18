@@ -921,13 +921,19 @@ problem — revisit if/when playback is fixed.
 ### 🆕 Reddit V3 — round 25 (2026-09-18): most-complete-media-wins (1wj0p83)
 
 **Reported failure:** `AnantaLeaks/1wj0p83` is a 13-photo gallery that was
-posted with only one photo and cached. A proxy returning some media used
-to stop the chain, even if a later proxy could return more.
+posted with only one photo and cached. The user-reported workflow-log
+reconstruction is: the pre-round-23 run accepted redditez's text-only result
+(0 images), never tried vxreddit/embeddit, failed through the redlib mirrors,
+and ultimately used the first image in the native RSS fallback. This historical
+log reconstruction was supplied by the user, not independently verified here.
+Round 23 addressed text-only early stopping; round 25 also addresses a proxy
+returning **some but not all** media when a later service can return more.
 
 * **C1 — most media wins:** `fetch_proxy_post` compares all eligible proxy
   services and keeps the largest media list. Ties preserve service priority;
   20 items reach the card capacity (two galleries of ten) and stop the chain
-  early. Health filtering, text-only fallback and video eligibility remain
+  early. The returned winning list is capped to 20 on a copy, leaving the
+  source result unchanged. Health filtering, text-only fallback and video eligibility remain
   unchanged. Logs show `best so far` and `replacing the winner`.
 * **C2 — known partial archive galleries retry:** if Arctic's valid structured
   gallery entries outnumber the resolved media, skip without caching. The next
@@ -1510,7 +1516,8 @@ Then run any engine: `python main.py` / `python main_v2.py` / `python main_v3.py
 
 * **2026-09-18 — Reddit V3 round 25: most-complete-media-wins (1wj0p83).**
   Proxy chain keeps the largest eligible media list (priority breaks ties;
-  20-item capacity stops early). Known partial archive galleries skip without
+  20-item capacity stops early and caps the returned list without mutating
+  the source result). Known partial archive galleries skip without
   caching and retry within the freshness window. Adds offline regression tests
   for 1-vs-13 images, ties, fallback, video, capacity, health and archive gates.
 

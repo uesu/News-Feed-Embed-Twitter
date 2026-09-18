@@ -1385,21 +1385,34 @@ async def _r25_proxy_checks():
     try:
         winner, calls, results = await run((1, 1, 13))
         check('r25 1wj0p83: embeddit wins with all 13 items',
-              winner is results[2] and len(winner['media']) == 13 and len(calls) == 3)
+              winner == results[2] and len(winner['media']) == 13 and len(calls) == 3)
         check('r25 winner preserves source image order', winner['media'] == results[2]['media'])
+        winner, calls, results = await run((0, 1, 13))
+        check('r25 text/partial/full: embeddit wins after text-only redditez',
+              winner == results[2] and calls == list(names))
+        winner, _, results = await run((0, 2, 0), need_video=True)
+        check('r25 need_video: no video keeps first non-video fallback', winner is results[0])
+        winner, calls, results = await run((25, 13, 1))
+        check('r25 over-cap: 25 items trimmed to 20 and chain stops',
+              winner['service'] == 'redditez' and len(winner['media']) == 20
+              and calls == ['redditez'])
+        check('r25 cap preserves order and leaves original result untouched',
+              winner is not results[0] and len(results[0]['media']) == 25
+              and winner['media'] == results[0]['media'][:20]
+              and winner['media'] is not results[0]['media'])
         winner, _, results = await run((2, 2, 1))
-        check('r25 equal counts preserve priority', winner is results[0])
+        check('r25 equal counts preserve priority', winner == results[0])
         winner, _, results = await run((0, 0, 0))
-        check('r25 text-only fallback remains first', winner is results[0])
+        check('r25 text-only fallback remains first', winner == results[0])
         winner, _, results = await run((13, 1, 20), video=True, need_video=True)
-        check('r25 need_video: video beats larger thumbnail lists', winner is results[1])
+        check('r25 need_video: video beats larger thumbnail lists', winner == results[1])
         winner, calls, results = await run((20, 1, 13))
         check('r25 capacity: later services never called',
-              winner is results[0] and calls == ['redditez'])
+              winner == results[0] and calls == ['redditez'])
         winner, calls, results = await run((1, 2, 13), health={'embeddit': {'ok': False}})
-        check('r25 health: marked-down service skipped', winner is results[1] and len(calls) == 2)
+        check('r25 health: marked-down service skipped', winner == results[1] and len(calls) == 2)
         winner, calls, results = await run((1, 2, 13), health={n: {'ok': False} for n in names})
-        check('r25 health: all down retries every service', winner is results[2] and len(calls) == 3)
+        check('r25 health: all down retries every service', winner == results[2] and len(calls) == 3)
     finally:
         for name, original in zip(names, saved):
             setattr(proxy, '_fetch_' + name, original)
